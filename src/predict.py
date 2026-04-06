@@ -38,12 +38,106 @@ import os;
 import numpy as np
 import argparse
 import json
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 
 import torch
 from torch_geometric.data import Data
 
 from gnn import SocialForceGNN
 from utils import *
+
+
+def plot_prediction_scene(frame_nx5: np.ndarray, predicted_offset: np.ndarray, save_path: str = "predict_scene.png") -> None:
+    """
+    Plot robot and pedestrian positions with velocity arrows, plus the predicted
+    offset arrow starting at the robot.
+    """
+    fig, ax = plt.subplots(figsize=(8, 8))
+
+    robot = frame_nx5[0]
+    pedestrians = frame_nx5[1:]
+
+    ax.scatter(robot[0], robot[1], c="tab:blue", s=120, label="robot", zorder=3)
+    ax.arrow(
+        robot[0],
+        robot[1],
+        robot[2],
+        robot[3],
+        color="tab:blue",
+        width=0.01,
+        length_includes_head=True,
+        head_width=0.08,
+        zorder=3,
+    )
+    ax.arrow(
+        robot[0],
+        robot[1],
+        predicted_offset[0],
+        predicted_offset[1],
+        color="tab:red",
+        width=0.01,
+        length_includes_head=True,
+        head_width=0.08,
+        zorder=4,
+    )
+    predicted_tip = robot[0:2] + predicted_offset
+    ax.text(
+        predicted_tip[0],
+        predicted_tip[1],
+        f" pred=({predicted_offset[0]:.3f}, {predicted_offset[1]:.3f})",
+        color="tab:red",
+        fontsize=10,
+        va="bottom",
+    )
+    ax.text(robot[0], robot[1], " robot", color="tab:blue", fontsize=10, va="bottom")
+
+    for idx, ped in enumerate(pedestrians, start=1):
+        ax.scatter(ped[0], ped[1], c="tab:green", s=80, zorder=3)
+        ax.arrow(
+            ped[0],
+            ped[1],
+            ped[2],
+            ped[3],
+            color="tab:green",
+            width=0.008,
+            length_includes_head=True,
+            head_width=0.06,
+            zorder=3,
+        )
+        ax.text(ped[0], ped[1], f" ped{idx}", color="tab:green", fontsize=9, va="bottom")
+
+    all_points = np.vstack(
+        [
+            frame_nx5[:, 0:2],
+            frame_nx5[:, 0:2] + frame_nx5[:, 2:4],
+            robot[0:2] + predicted_offset.reshape(1, 2),
+        ]
+    )
+    min_xy = np.min(all_points, axis=0)
+    max_xy = np.max(all_points, axis=0)
+    center_xy = 0.5 * (min_xy + max_xy)
+    half_range = 0.5 * np.max(max_xy - min_xy) + 0.3
+
+    ax.set_xlim(center_xy[0] - half_range, center_xy[0] + half_range)
+    ax.set_ylim(center_xy[1] - half_range, center_xy[1] + half_range)
+    ax.set_aspect("equal", adjustable="box")
+    ax.grid(True, linestyle="--", alpha=0.5)
+    ax.axhline(0.0, color="gray", linewidth=0.8, alpha=0.6)
+    ax.axvline(0.0, color="gray", linewidth=0.8, alpha=0.6)
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_title("Prediction Scene")
+    legend_handles = [
+        Line2D([0], [0], color="tab:blue", marker="o", linestyle="-", label="robot"),
+        Line2D([0], [0], color="tab:red", linestyle="-", label="predicted offset"),
+        Line2D([0], [0], color="tab:green", marker="o", linestyle="-", label="pedestrian"),
+    ]
+    ax.legend(handles=legend_handles, loc="upper right")
+
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.show()
 
 # ----------------------------
 # Main
@@ -56,9 +150,9 @@ def main():
 
     frame_nx5 = np.array(
     [
-        [0.0, 0.0, 0.6, 0.0, 1.0],     # robot
-        [1.2, 0.3, -0.2, 0.0, 0.0],    # pedestrian 1
-        [2.1, -0.4, -0.1, 0.1, 0.0],   # pedestrian 2
+        [1.0, 0.0, 0.6, 0.0, 1.0],     # robot
+        [1.2, -0.3, -0.2, 0.0, 0.0],    # pedestrian 1
+        [2.1, 0.4, -0.1, -0.1, 0.0],   # pedestrian 2
     ],
     dtype=np.float32,
 )
@@ -85,6 +179,7 @@ def main():
         y_hat = model(data.to(device)).cpu().numpy().reshape(-1)
 
     print("Predicted CV residual [dx, dy]:", y_hat.tolist())
+    plot_prediction_scene(frame_nx5, y_hat)
     
 
 if __name__ == "__main__":

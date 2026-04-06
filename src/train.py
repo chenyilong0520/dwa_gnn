@@ -86,6 +86,14 @@ def train_one_epoch(model: nn.Module, loader: DataLoader, opt: torch.optim.Optim
     return total / max(n, 1)
 
 
+def format_float_for_filename(value: float) -> str:
+    """
+    Convert a float into a compact, filesystem-friendly token.
+    Example: 1e-4 -> 1e-04, 0.0003 -> 3e-04.
+    """
+    return f"{value:.0e}"
+
+
 # ----------------------------
 # Main
 # ----------------------------
@@ -124,8 +132,8 @@ def main():
         help="Disable augmented NPZ files for the validation split.",
     )
     ap.add_argument("--batch_size", type=int, default=64)
-    ap.add_argument("--epochs", type=int, default=25)
-    ap.add_argument("--lr", type=float, default=1e-4)
+    ap.add_argument("--epochs", type=int, default=50)
+    ap.add_argument("--lr", type=float, default=5e-5)
     ap.add_argument("--hidden_dim", type=int, default=128)
     ap.add_argument("--num_layers", type=int, default=3)
     ap.add_argument("--seed", type=int, default=42)
@@ -252,7 +260,12 @@ def main():
 
     
     # ---- Plot losses vs epochs ----
-    plot_loss_history(train_losses,val_losses,"loss.png")
+    loss_plot_name = (
+        f"loss_lr{format_float_for_filename(args.lr)}_"
+        f"hd{args.hidden_dim}_nl{args.num_layers}_bs{args.batch_size}.png"
+    )
+    plot_loss_history(train_losses, val_losses, loss_plot_name)
+    print(f"Saved loss curve to {loss_plot_name}")
 
     print("Done.")
 
