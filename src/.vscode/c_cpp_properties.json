@@ -1,0 +1,31 @@
+{
+  "configurations": [
+    {
+      "browse": {
+        "databaseFilename": "${default}",
+        "limitSymbolsToIncludedHeaders": false
+      },
+      "includePath": [
+        "/home/yilong/catkin_ws/devel/include/**",
+        "/opt/ros/noetic/include/**",
+        "/home/yilong/catkin_ws/src/custom_slam/include/**",
+        "/home/yilong/catkin_ws/src/navigation/dwa_local_planner/include/**",
+        "/home/yilong/catkin_ws/src/dynamic_object_detection/include/**",
+        "/home/yilong/catkin_ws/src/dynamic_object_detection2/include/**",
+        "/home/yilong/catkin_ws/src/navigation/global_planner/include/**",
+        "/home/yilong/catkin_ws/src/rical_unitree_controller/LIO-SAM/include/**",
+        "/home/yilong/catkin_ws/src/multiple-object-tracking-lidar/include/**",
+        "/home/yilong/catkin_ws/src/rical_unitree_controller/rical_unitree_controller/include/**",
+        "/home/yilong/catkin_ws/src/rical_unitree_controller/usb_cam/include/**",
+        "/home/yilong/catkin_ws/src/rical_unitree_controller/yostlab_imu/include/**",
+        "/usr/include/**"
+      ],
+      "name": "ROS",
+      "intelliSenseMode": "gcc-x64",
+      "compilerPath": "/usr/bin/gcc",
+      "cStandard": "gnu11",
+      "cppStandard": "c++14"
+    }
+  ],
+  "version": 4
+}
