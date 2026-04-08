@@ -29,6 +29,7 @@ from __future__ import annotations
 import os
 import re
 import argparse
+import copy
 from dataclasses import dataclass
 from typing import List, Tuple, Optional
 
@@ -68,7 +69,58 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device) -> Tupl
     return mse_sum / max(n, 1), mae_sum / max(n, 1)
 
 
-def train_one_epoch(model: nn.Module, loader: DataLoader, opt: torch.optim.Optimizer, device: torch.device) -> float:
+def compute_edge_attr_torch(x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
+    if edge_index.shape[1] == 0:
+        return torch.zeros((0, 7), dtype=x.dtype, device=x.device)
+
+    src = edge_index[0]
+    dst = edge_index[1]
+
+    dx = x[dst, 0] - x[src, 0]
+    dy = x[dst, 1] - x[src, 1]
+    dvx = x[dst, 2] - x[src, 2]
+    dvy = x[dst, 3] - x[src, 3]
+
+    d = torch.sqrt(dx * dx + dy * dy)
+    theta = torch.atan2(dy, dx)
+
+    return torch.stack(
+        [dx, dy, dvx, dvy, d, torch.sin(theta), torch.cos(theta)],
+        dim=1,
+    )
+
+
+def make_noisy_batch(batch, sigma_pos: float, sigma_vel: float):
+    noisy_batch = copy.copy(batch)
+    x_noisy = batch.x.clone()
+
+    pedestrian_mask = torch.ones(x_noisy.shape[0], dtype=torch.bool, device=x_noisy.device)
+    if hasattr(batch, "ptr") and batch.ptr is not None:
+        pedestrian_mask[batch.ptr[:-1]] = False
+    elif x_noisy.shape[0] > 0:
+        pedestrian_mask[0] = False
+
+    if sigma_pos > 0.0:
+        x_noisy[pedestrian_mask, 0:2] += sigma_pos * torch.randn_like(x_noisy[pedestrian_mask, 0:2])
+    if sigma_vel > 0.0:
+        x_noisy[pedestrian_mask, 2:4] += sigma_vel * torch.randn_like(x_noisy[pedestrian_mask, 2:4])
+
+    noisy_batch.x = x_noisy
+    noisy_batch.edge_attr = compute_edge_attr_torch(x_noisy, batch.edge_index)
+    return noisy_batch
+
+
+def train_one_epoch(
+    model: nn.Module,
+    loader: DataLoader,
+    opt: torch.optim.Optimizer,
+    device: torch.device,
+    use_consistency_loss: bool = False,
+    lambda_cons: float = 0.1,
+    sigma_pos: float = 0.03,
+    sigma_vel: float = 0.05,
+    supervise_noisy: bool = True,
+) -> float:
     model.train()
     total = 0.0
     n = 0
@@ -78,6 +130,15 @@ def train_one_epoch(model: nn.Module, loader: DataLoader, opt: torch.optim.Optim
         pred = model(batch)
         y = batch.y.view(-1, 2)
         loss = F.mse_loss(pred, y)
+
+        if use_consistency_loss:
+            noisy_batch = make_noisy_batch(batch, sigma_pos=sigma_pos, sigma_vel=sigma_vel)
+            noisy_pred = model(noisy_batch)
+            consistency_loss = F.mse_loss(pred, noisy_pred)
+            loss = loss + lambda_cons * consistency_loss
+            if supervise_noisy:
+                loss = loss + F.mse_loss(noisy_pred, y)
+
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), 5.0)
         opt.step()
@@ -136,6 +197,22 @@ def main():
     ap.add_argument("--lr", type=float, default=5e-5)
     ap.add_argument("--hidden_dim", type=int, default=128)
     ap.add_argument("--num_layers", type=int, default=3)
+    ap.add_argument(
+        "--consistency_loss",
+        action="store_true",
+        default=False,
+        help="Enable consistency regularization with Gaussian noise on pedestrian pos/vel.",
+    )
+    ap.add_argument("--lambda_cons", type=float, default=0.1, help="Weight for consistency loss.")
+    ap.add_argument("--sigma_pos", type=float, default=0.03, help="Std of Gaussian noise added to pedestrian positions.")
+    ap.add_argument("--sigma_vel", type=float, default=0.05, help="Std of Gaussian noise added to pedestrian velocities.")
+    ap.add_argument(
+        "--no_supervise_noisy",
+        dest="supervise_noisy",
+        action="store_false",
+        help="Disable supervised loss on the noisy view when consistency loss is enabled.",
+    )
+    ap.set_defaults(supervise_noisy=True)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--val_ratio", type=float, default=0.2, help="Fraction of sequences used for validation")
     ap.add_argument("--save_path", type=str, default="gnn_model.pt")
@@ -235,7 +312,17 @@ def main():
     train_losses = []
     val_losses = []
     for epoch in range(1, args.epochs + 1):
-        tr_loss = train_one_epoch(model, train_loader, opt, device)
+        tr_loss = train_one_epoch(
+            model,
+            train_loader,
+            opt,
+            device,
+            use_consistency_loss=args.consistency_loss,
+            lambda_cons=args.lambda_cons,
+            sigma_pos=args.sigma_pos,
+            sigma_vel=args.sigma_vel,
+            supervise_noisy=args.supervise_noisy,
+        )
         val_mse, val_mae = evaluate(model, val_loader, device)
         
         train_losses.append(tr_loss)
