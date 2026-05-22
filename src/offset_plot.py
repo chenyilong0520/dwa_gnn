@@ -299,7 +299,6 @@ class OffsetPlotter:
         ped_speeds = self.compute_speed_data()
         with self.data_lock:
             sensor_positions = list(self.sensor_positions)
-            offset_positions = list(self.offset_positions)
 
         curr_x, curr_y, _ = sensor_positions[-1] if sensor_positions else (0.0, 0.0, 0.0)
 
@@ -316,14 +315,19 @@ class OffsetPlotter:
         self.last_predicted_offset = predicted_offset
 
         if len(sensor_positions) != self.last_sensor_index:
-            for i in range(self.last_sensor_index, len(sensor_positions)):
-                x, y, _ = sensor_positions[i]
-                new_offset = (x + predicted_offset[0], y + predicted_offset[1])
-                self.offset_positions.append(new_offset)
-                offset_positions.append(new_offset)
-            self.last_sensor_index = len(sensor_positions)
-        
-        print(len(self.sensor_positions), len(self.offset_positions), len(ped_speeds))
+            # Append an offset entry for every new sensor frame since last update.
+            with self.data_lock:
+                for i in range(self.last_sensor_index, len(self.sensor_positions)):
+                    x, y, _ = self.sensor_positions[i]
+                    new_offset = (x + predicted_offset[0], y + predicted_offset[1])
+                    self.offset_positions.append(new_offset)
+                self.last_sensor_index = len(self.sensor_positions)
+
+        # Snapshot offsets after the update so drawing sees the latest copy.
+        with self.data_lock:
+            offset_positions = list(self.offset_positions)
+
+        #print(len(self.sensor_positions), len(self.offset_positions), len(ped_speeds))
 
         self.draw_on_axis(self.ax, sensor_positions, offset_positions, ped_speeds)
         try:
