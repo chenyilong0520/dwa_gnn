@@ -316,8 +316,14 @@ class OffsetPlotter:
         self.last_predicted_offset = predicted_offset
 
         if len(sensor_positions) != self.last_sensor_index:
-            self.offset_positions.append((curr_x + predicted_offset[0], curr_y + predicted_offset[1]))
+            for i in range(self.last_sensor_index, len(sensor_positions)):
+                x, y, _ = sensor_positions[i]
+                new_offset = (x + predicted_offset[0], y + predicted_offset[1])
+                self.offset_positions.append(new_offset)
+                offset_positions.append(new_offset)
             self.last_sensor_index = len(sensor_positions)
+        
+        print(len(self.sensor_positions), len(self.offset_positions), len(ped_speeds))
 
         self.draw_on_axis(self.ax, sensor_positions, offset_positions, ped_speeds)
         try:
