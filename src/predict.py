@@ -176,9 +176,21 @@ def main():
     model.eval()
 
     with torch.no_grad():
-        y_hat = model(data.to(device)).cpu().numpy().reshape(-1)
+        y_hat_local = model(data.to(device)).cpu().numpy().reshape(-1)
 
-    print("Predicted CV residual [dx, dy]:", y_hat.tolist())
+    # Transform local offset to global
+    robot_vx, robot_vy = frame_nx5[0, 2], frame_nx5[0, 3]
+    speed = np.sqrt(robot_vx**2 + robot_vy**2)
+    if speed > 1e-6:
+        theta = np.arctan2(robot_vy, robot_vx)
+        cos_theta = np.cos(theta)
+        sin_theta = np.sin(theta)
+        R_theta = np.array([[cos_theta, -sin_theta], [sin_theta, cos_theta]])
+        y_hat = R_theta @ y_hat_local
+    else:
+        y_hat = y_hat_local
+
+    print("Predicted CV residual [dx, dy] (global):", y_hat.tolist())
     plot_prediction_scene(frame_nx5, y_hat)
     
 

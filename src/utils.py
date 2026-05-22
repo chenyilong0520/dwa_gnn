@@ -291,13 +291,29 @@ def robot_cv_residual_label(
     k: int,
 ) -> np.ndarray:
     """
-    Robot-level CV residual:
-      y = p_curr - (p_prev + v_prev_global * (k*dt))
+    Robot-level CV residual in robot's local frame:
+      y_global = p_curr - (p_prev + v_prev_global * (k*dt))
+      Then transform y_global to local frame using v_prev_global direction.
     where p_* are global-frame positions,
     and v_prev_global is GLOBAL (vx_0,vy_0) from XML for the prev frame.
     """
     p_pred = p_prev_global + v_prev_global * (k * dt)
-    return (p_curr_global - p_pred).astype(np.float32)
+    y_global = (p_curr_global - p_pred).astype(np.float32)
+    
+    # Transform to robot's local frame
+    vx, vy = v_prev_global
+    speed = np.sqrt(vx**2 + vy**2)
+    if speed > 1e-6:
+        theta = np.arctan2(vy, vx)
+        cos_theta = np.cos(theta)
+        sin_theta = np.sin(theta)
+        # Rotation matrix: global -> local
+        R_inv = np.array([[cos_theta, sin_theta], [-sin_theta, cos_theta]])
+        y_local = R_inv @ y_global
+    else:
+        y_local = y_global
+    
+    return y_local.astype(np.float32)
 
 
 # =========================

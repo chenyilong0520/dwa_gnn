@@ -161,7 +161,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sensor-topic", type=str, default="/motion_detector/visualization/lidar_pose")
     ap.add_argument("--ped-topic", type=str, default="/motion_detector/visualization/detections/centroid/dynamic")
-    ap.add_argument("--save-path", type=str, default="trajectory_plot.png")
+    ap.add_argument("--save-path", type=str, default="trajectory.png")
     ap.add_argument("--title", type=str, default="Dynablox Trajectories")
     ap.add_argument("--max-pedestrians", type=int, default=30)
     ap.add_argument("--refresh-hz", type=float, default=2.0, help="Plot refresh rate.")
