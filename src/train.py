@@ -161,7 +161,12 @@ def format_float_for_filename(value: float) -> str:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--npz_dir", type=str, default="./data/data_processed", help="Directory containing gnn_dataset_*.npz files")
+    ap.add_argument(
+        "--npz_dir", 
+        type=str, 
+        default="./data/data_processed", 
+        help="Directory containing gnn_dataset_*.npz files"
+    )
     ap.add_argument(
         "--augmented_npz_dir",
         type=str,

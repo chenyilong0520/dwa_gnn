@@ -222,7 +222,7 @@ def plot_trajectory_with_offset(
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model-path", type=str, default="gnn_model_origin.pt", help="Path to trained GNN model.")
-    ap.add_argument("--save-path", type=str, default="trajectory_offset_plot.png", help="Output plot file path.")
+    ap.add_argument("--save-path", type=str, default="sample_plot.png", help="Output plot file path.")
     ap.add_argument("--title", type=str, default="Trajectory with Predicted Offsets", help="Plot title.")
     args = ap.parse_args()
 
@@ -231,11 +231,11 @@ def main() -> None:
     # Only edit waypoints; dense trajectory points are auto-sampled below.
     # ============================================================
     robot_waypoints = np.array([
-        [0.0, 0.0],
-        [1.0, 0.0],
-        [2.0, 0.0],
-        [3.0, 0.0],
         [4.0, 0.0],
+        [3.0, 0.0],
+        [2.0, 0.0],
+        [1.0, 0.0],
+        [0.0, 0.0],
     ], dtype=np.float32)
     robot_trajectory = sample_trajectory_from_waypoints(robot_waypoints, samples_per_segment=10)
 
@@ -243,11 +243,11 @@ def main() -> None:
     # Simple pedestrian positions (fixed for demonstration)
     # ============================================================
     pedestrian_positions = np.array([
-        [0.5, -0.2]
+        [2, 0]
     ], dtype=np.float32)
 
     pedestrian_velocities = np.array([
-        [0.0, 5.0]
+        [0.0, 0.0]
     ], dtype=np.float32)
 
     # ============================================================
@@ -265,12 +265,17 @@ def main() -> None:
     last_valid_theta: Optional[float] = None
     
     for i, robot_pos in enumerate(robot_trajectory):
-        # Compute robot velocity from consecutive positions
+        # Compute robot velocity direction from consecutive positions,
+        # but fix the speed magnitude to 0.4 m/s.
         if i == 0:
             robot_vel = np.array([0.0, 0.0], dtype=np.float32)
         else:
-            dt = 1.0  # Assume unit time step
-            robot_vel = (robot_trajectory[i] - robot_trajectory[i-1]) / dt
+            direction = robot_trajectory[i] - robot_trajectory[i-1]
+            direction_norm = np.linalg.norm(direction)
+            if direction_norm > 1e-6:
+                robot_vel = 0.4 * (direction / direction_norm)
+            else:
+                robot_vel = np.array([0.0, 0.0], dtype=np.float32)
 
         speed = np.linalg.norm(robot_vel)
         if speed > 1e-6:
@@ -293,9 +298,9 @@ def main() -> None:
             )
             offset_pos = robot_pos + predicted_offset
             offset_trajectory.append(offset_pos)
-            print(f"Frame {i}: robot={robot_pos}, offset={predicted_offset}, offset_pos={offset_pos}")
+            #print(f"Frame {i}: robot={robot_pos}, offset={predicted_offset}, offset_pos={offset_pos}")
         except Exception as e:
-            print(f"Frame {i}: prediction failed ({e}), using zero offset")
+            #print(f"Frame {i}: prediction failed ({e}), using zero offset")
             offset_trajectory.append(robot_pos)
     
     offset_trajectory = np.array(offset_trajectory, dtype=np.float32)

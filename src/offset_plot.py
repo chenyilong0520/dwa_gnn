@@ -205,14 +205,14 @@ class OffsetPlotter:
         # Transform local offset to global
         robot_vx, robot_vy = frame_array[0, 2], frame_array[0, 3]
         speed = np.sqrt(robot_vx**2 + robot_vy**2)
-        #if speed > 1e-6:
-        theta = np.arctan2(robot_vy, robot_vx)
-        cos_theta = np.cos(theta)
-        sin_theta = np.sin(theta)
-        R_theta = np.array([[cos_theta, -sin_theta], [sin_theta, cos_theta]])
-        y_hat = R_theta @ y_hat_local
-        #else:
-        #    y_hat = y_hat_local
+        if speed > 1e-6:
+            theta = np.arctan2(robot_vy, robot_vx)
+            cos_theta = np.cos(theta)
+            sin_theta = np.sin(theta)
+            R_theta = np.array([[cos_theta, -sin_theta], [sin_theta, cos_theta]])
+            y_hat = R_theta @ y_hat_local
+        else:
+            y_hat = y_hat_local
         
         return y_hat
 
