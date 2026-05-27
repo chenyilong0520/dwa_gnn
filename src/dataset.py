@@ -252,7 +252,7 @@ if __name__ == "__main__":
         print(f"Saved → {out_file}")
 
         if args.write_augmented:
-            # 4) Create and save augmented dataset (y-axis flip in robot frame)
+            # 4) Create and save augmented dataset
             augmented_samples = augment_samples_flip_x(samples)
             augmented_out_file = os.path.join(
                 args.augmented_out_dir,
