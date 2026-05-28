@@ -212,6 +212,8 @@ def parse_frame_to_node_features(
       - x_i,y_i are global positions
       - vx_i,vy_i are global velocities
     """
+    
+    # before change
     attrib = frame.attrib
     V = infer_num_nodes(attrib)
 
