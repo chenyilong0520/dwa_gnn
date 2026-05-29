@@ -230,9 +230,23 @@ def parse_frame_to_node_features(
     p_robot_global = pos_glb[0].copy()
     v_robot_global = vel_glb[0].copy()
 
-    # Convert GLOBAL velocities -> robot-relative velocities for node features
+    # Translate to robot-centered coordinates
     pos_rel = pos_glb - p_robot_global
     vel_rel = vel_glb - v_robot_global  # broadcasting: [V,2] - [2]
+
+    # Rotate into robot heading frame using previous robot velocity direction
+    vx, vy = v_robot_global
+    speed = np.sqrt(vx * vx + vy * vy)
+    if speed > 1e-6:
+        theta = np.arctan2(vy, vx)
+        cos_theta = np.cos(theta)
+        sin_theta = np.sin(theta)
+        R_inv = np.array([[cos_theta, sin_theta], [-sin_theta, cos_theta]], dtype=np.float32)
+        pos_rel = (R_inv @ pos_rel.T).T
+        vel_rel = (R_inv @ vel_rel.T).T
+    else:
+        pos_rel = pos_rel.astype(np.float32)
+        vel_rel = vel_rel.astype(np.float32)
 
     # Assemble node feature matrix
     x = np.zeros((V, 5), dtype=np.float32)
@@ -243,20 +257,33 @@ def parse_frame_to_node_features(
     x[:, 4] = 0.0
     x[0, 4] = 1.0
 
-    return x, p_robot_global ,v_robot_global
+    return x, p_robot_global, v_robot_global
 
 def preprocess_frame_to_node_features(frame: np.ndarray) -> np.ndarray:
     """
     Input:  [N,5] = [x,y,vx_global,vy_global,rbt]
-    Output: [N,5] = [x_rel,y_rel,vx_rel,vy_rel,is_robot]
+    Output: [N,5] = [x_rel,y_rel,vx_rel,vy_rel,is_robot] in the robot heading frame.
     """
     pos_glb = frame[:, 0:2]
     vel_glb = frame[:, 2:4]
 
     p_robot_glob = pos_glb[0].copy()
-    v_robot_glb = vel_glb[0].copy()
+    v_robot_glob = vel_glb[0].copy()
     pos_rel = pos_glb - p_robot_glob
-    vel_rel = vel_glb - v_robot_glb
+    vel_rel = vel_glb - v_robot_glob
+
+    vx, vy = v_robot_glob
+    speed = np.sqrt(vx * vx + vy * vy)
+    if speed > 1e-6:
+        theta = np.arctan2(vy, vx)
+        cos_theta = np.cos(theta)
+        sin_theta = np.sin(theta)
+        R_inv = np.array([[cos_theta, sin_theta], [-sin_theta, cos_theta]], dtype=np.float32)
+        pos_rel = (R_inv @ pos_rel.T).T
+        vel_rel = (R_inv @ vel_rel.T).T
+    else:
+        pos_rel = pos_rel.astype(np.float32)
+        vel_rel = vel_rel.astype(np.float32)
 
     is_robot = np.zeros((frame.shape[0], 1), dtype=np.float32)
     is_robot[0, 0] = 1.0
@@ -275,8 +302,8 @@ def nearest_ped_distance(x: np.ndarray) -> float:
     V = x.shape[0]
     if V <= 1:
         return float("inf")
-    dx = x[1:, 0] - x[0, 0]
-    dy = x[1:, 1] - x[0, 1]
+    dx = x[1:, 0]
+    dy = x[1:, 1]
     d = np.sqrt(dx * dx + dy * dy)
     return float(np.min(d))
 
