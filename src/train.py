@@ -244,7 +244,7 @@ def main():
 
     if args.include_augmented_train:
         train_augmented_names = {
-            f"{os.path.splitext(os.path.basename(path))[0]}_flip_x.npz"
+            f"{os.path.splitext(os.path.basename(path))[0]}_flip_y.npz"
             for path in train_files
         }
         augmented_train_npz_files = [
@@ -258,7 +258,7 @@ def main():
             )
     if args.include_augmented_val:
         val_augmented_names = {
-            f"{os.path.splitext(os.path.basename(path))[0]}_flip_x.npz"
+            f"{os.path.splitext(os.path.basename(path))[0]}_flip_y.npz"
             for path in val_files
         }
         augmented_val_npz_files = [

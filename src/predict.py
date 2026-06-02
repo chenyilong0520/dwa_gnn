@@ -158,6 +158,7 @@ def main():
 )
 
     x_node = preprocess_frame_to_node_features(frame_nx5)
+    print(x_node)
     #edge_index, edge_attr = build_bidirectional_star(x_node)
     edge_index, edge_attr = build_directional_star(x_node)
 
@@ -190,6 +191,7 @@ def main():
     else:
         y_hat = y_hat_local
 
+    print("Predicted CV residual [dx, dy] (local):", y_hat_local.tolist())
     print("Predicted CV residual [dx, dy] (global):", y_hat.tolist())
     plot_prediction_scene(frame_nx5, y_hat)
     

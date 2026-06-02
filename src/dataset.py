@@ -256,7 +256,7 @@ if __name__ == "__main__":
             augmented_samples = augment_samples_flip_y(samples)
             augmented_out_file = os.path.join(
                 args.augmented_out_dir,
-                f"gnn_dataset_{folder}_flip_x.npz",
+                f"gnn_dataset_{folder}_flip_y.npz",
             )
             save_graph_samples_npz(augmented_out_file, augmented_samples)
             print(f"Saved augmented → {augmented_out_file}")
