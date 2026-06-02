@@ -53,13 +53,13 @@ class GraphSample:
     meta: Dict[str, Any]
 
 
-def augment_samples_flip_x(samples: List[GraphSample]) -> List[GraphSample]:
+def augment_samples_flip_y(samples: List[GraphSample]) -> List[GraphSample]:
     """
-    Mirror samples across the y-axis in robot frame by flipping x-related terms.
+    Mirror samples across the y-axis in robot frame by flipping y-related terms.
     """
     augmented_samples: List[GraphSample] = []
     for sample in samples:
-        x_aug, edge_index_aug, edge_attr_aug, y_aug, meta_aug = flip_graph_sample_x(
+        x_aug, edge_index_aug, edge_attr_aug, y_aug, meta_aug = flip_graph_sample_y(
             sample.x,
             sample.edge_index,
             sample.y,
@@ -253,7 +253,7 @@ if __name__ == "__main__":
 
         if args.write_augmented:
             # 4) Create and save augmented dataset
-            augmented_samples = augment_samples_flip_x(samples)
+            augmented_samples = augment_samples_flip_y(samples)
             augmented_out_file = os.path.join(
                 args.augmented_out_dir,
                 f"gnn_dataset_{folder}_flip_x.npz",

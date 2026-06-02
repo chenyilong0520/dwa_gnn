@@ -119,7 +119,7 @@ def load_samples_from_npz(npz_path: str) -> List[Data]:
     return data_list
 
 
-def flip_graph_sample_x(
+def flip_graph_sample_y(
     x: np.ndarray,
     edge_index: np.ndarray,
     y: np.ndarray,
@@ -129,9 +129,9 @@ def flip_graph_sample_x(
     Mirror one graph sample across the y-axis in robot frame.
 
     Flipped terms:
-      - node feature x_rel   -> -x_rel
-      - node feature vx_rel  -> -vx_rel
-      - label dx             -> -dx
+      - node feature y_rel   -> -y_rel
+      - node feature vy_rel  -> -vy_rel
+      - label dy             -> -dy
 
     Edge features are recomputed from the mirrored node features so the
     direction-dependent terms stay self-consistent.
@@ -140,9 +140,9 @@ def flip_graph_sample_x(
     edge_index_aug = np.asarray(edge_index, dtype=np.int64).copy()
     y_aug = np.asarray(y, dtype=np.float32).copy()
 
-    x_aug[:, 0] *= -1.0
-    x_aug[:, 2] *= -1.0
-    y_aug[0] *= -1.0
+    x_aug[:, 1] *= -1.0
+    x_aug[:, 3] *= -1.0
+    y_aug[1] *= -1.0
     edge_attr_aug = compute_edge_attr(x_aug, edge_index_aug)
 
     meta_aug: Dict[str, Any] = dict(meta) if meta is not None else {}
