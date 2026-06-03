@@ -150,22 +150,30 @@ def main():
 
     frame_nx5 = np.array(
     [
-        [1.0, 0.0, 0.6, 0.0, 1.0],     # robot
-        [1.2, -0.3, -0.2, 0.0, 0.0],    # pedestrian 1
-        [2.1, 0.4, -0.1, -0.1, 0.0],   # pedestrian 2
+        [0.5, 0.0, 0.5, 0.0, 1.0],     # robot
+        #[1.25, -0.25, -0.4, 0.0, 0.0],    # pedestrian 1
+        [0.5, 0.5, 0.0, -0.5, 0.0],   # pedestrian 2
     ],
     dtype=np.float32,
 )
 
     x_node = preprocess_frame_to_node_features(frame_nx5)
-    print(x_node)
     #edge_index, edge_attr = build_bidirectional_star(x_node)
     edge_index, edge_attr = build_directional_star(x_node)
-
     data = Data(
         x=torch.from_numpy(x_node),
         edge_index=torch.from_numpy(edge_index),
         edge_attr=torch.from_numpy(edge_attr),
+    )
+
+    x_node_aug = np.asarray(x_node, dtype=np.float32).copy()
+    x_node_aug[:, 1] *= -1.0
+    x_node_aug[:, 3] *= -1.0
+    edge_index_aug, edge_attr_aug = build_directional_star(x_node_aug)
+    data_aug = Data(
+        x=torch.from_numpy(x_node_aug),
+        edge_index=torch.from_numpy(edge_index_aug),
+        edge_attr=torch.from_numpy(edge_attr_aug),
     )
 
     # ============================================================
@@ -178,6 +186,7 @@ def main():
 
     with torch.no_grad():
         y_hat_local = model(data.to(device)).cpu().numpy().reshape(-1)
+        y_hat_local_aug = model(data_aug.to(device)).cpu().numpy().reshape(-1)
 
     # Transform local offset to global
     robot_vx, robot_vy = frame_nx5[0, 2], frame_nx5[0, 3]
@@ -188,11 +197,16 @@ def main():
         sin_theta = np.sin(theta)
         R_theta = np.array([[cos_theta, -sin_theta], [sin_theta, cos_theta]])
         y_hat = R_theta @ y_hat_local
+        y_hat_aug = R_theta @ y_hat_local_aug
     else:
         y_hat = y_hat_local
+        y_hat_aug = y_hat_local_aug
 
+    print("data",data.x.numpy(),data.edge_index.numpy(),data.edge_attr.numpy()) 
     print("Predicted CV residual [dx, dy] (local):", y_hat_local.tolist())
     print("Predicted CV residual [dx, dy] (global):", y_hat.tolist())
+    print("Predicted CV residual [dx, dy] (augmented local):", y_hat_local_aug.tolist())
+    print("Predicted CV residual [dx, dy] (augmented global):", y_hat_aug.tolist())
     plot_prediction_scene(frame_nx5, y_hat)
     
 

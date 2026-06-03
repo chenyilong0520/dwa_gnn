@@ -29,7 +29,7 @@ from utils import (
 
 def sample_trajectory_from_waypoints(
     waypoints: np.ndarray,
-    samples_per_segment: int = 10,
+    samples_per_segment: int = 2,
 ) -> np.ndarray:
     """
     Linearly sample points along each trajectory segment.
@@ -102,6 +102,11 @@ def predict_offset_at_frame(
         y_hat = R_theta @ y_hat_local
     else:
         y_hat = y_hat_local
+    
+    print("------------------------------------------------------------------------------")
+    print("data",data.x.numpy(),data.edge_index.numpy(),data.edge_attr.numpy())
+    print(f"Predicted CV residual [dx, dy] (local): {y_hat_local.tolist()}")
+    #print(f"Predicted CV residual [dx, dy] (global): {y_hat.tolist()}")
     
     return y_hat
 
@@ -221,7 +226,7 @@ def plot_trajectory_with_offset(
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model-path", type=str, default="gnn_model_origin.pt", help="Path to trained GNN model.")
+    ap.add_argument("--model-path", type=str, default="gnn_model.pt", help="Path to trained GNN model.")
     ap.add_argument("--save-path", type=str, default="sample_plot.png", help="Output plot file path.")
     ap.add_argument("--title", type=str, default="Trajectory with Predicted Offsets", help="Plot title.")
     args = ap.parse_args()
@@ -231,20 +236,20 @@ def main() -> None:
     # Only edit waypoints; dense trajectory points are auto-sampled below.
     # ============================================================
     robot_waypoints = np.array([
-        [4.0, 0.0],
+        [0.0, 1.0],
         [0.0, 0.0],
     ], dtype=np.float32)
-    robot_trajectory = sample_trajectory_from_waypoints(robot_waypoints, samples_per_segment=10)
+    robot_trajectory = sample_trajectory_from_waypoints(robot_waypoints, samples_per_segment=2)
 
     # ============================================================
     # Simple pedestrian positions (fixed for demonstration)
     # ============================================================
     pedestrian_positions = np.array([
-        [2, 0.2]
+        [0.5, 0.5]
     ], dtype=np.float32)
 
     pedestrian_velocities = np.array([
-        [0.0, -0.5]
+        [-0.5, 0.0]
     ], dtype=np.float32)
 
     # ============================================================
@@ -265,12 +270,17 @@ def main() -> None:
         # Compute robot velocity direction from consecutive positions,
         # but fix the speed magnitude to 0.4 m/s.
         if i == 0:
-            robot_vel = np.array([0.0, 0.0], dtype=np.float32)
+            direction = robot_trajectory[i+1] - robot_trajectory[i]
+            direction_norm = np.linalg.norm(direction)
+            if direction_norm > 1e-6:
+                robot_vel = 0.5 * (direction / direction_norm)
+            else:   
+                robot_vel = np.array([0.0, 0.0], dtype=np.float32)
         else:
             direction = robot_trajectory[i] - robot_trajectory[i-1]
             direction_norm = np.linalg.norm(direction)
             if direction_norm > 1e-6:
-                robot_vel = 0.4 * (direction / direction_norm)
+                robot_vel = 0.5 * (direction / direction_norm)
             else:
                 robot_vel = np.array([0.0, 0.0], dtype=np.float32)
 
