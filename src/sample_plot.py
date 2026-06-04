@@ -236,8 +236,8 @@ def main() -> None:
     # Only edit waypoints; dense trajectory points are auto-sampled below.
     # ============================================================
     robot_waypoints = np.array([
-        [0.0, 1.0],
-        [0.0, 0.0],
+        [0.0, -2.0],
+        [0.0, 2.0],
     ], dtype=np.float32)
     robot_trajectory = sample_trajectory_from_waypoints(robot_waypoints, samples_per_segment=2)
 
@@ -245,7 +245,7 @@ def main() -> None:
     # Simple pedestrian positions (fixed for demonstration)
     # ============================================================
     pedestrian_positions = np.array([
-        [0.5, 0.5]
+        [-0.5, 0.5]
     ], dtype=np.float32)
 
     pedestrian_velocities = np.array([

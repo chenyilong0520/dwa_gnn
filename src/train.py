@@ -197,11 +197,11 @@ def main():
         action="store_false",
         help="Disable augmented NPZ files for the validation split.",
     )
-    ap.add_argument("--batch_size", type=int, default=64)
-    ap.add_argument("--epochs", type=int, default=50)
-    ap.add_argument("--lr", type=float, default=5e-5)
-    ap.add_argument("--hidden_dim", type=int, default=128)
-    ap.add_argument("--num_layers", type=int, default=3)
+    ap.add_argument("--batch_size", type=int, default=64) #64
+    ap.add_argument("--epochs", type=int, default=30) #50
+    ap.add_argument("--lr", type=float, default=5e-4) #5e-5
+    ap.add_argument("--hidden_dim", type=int, default=64) #128
+    ap.add_argument("--num_layers", type=int, default=3) #3
     ap.add_argument(
         "--consistency_loss",
         action="store_true",
@@ -311,7 +311,7 @@ def main():
         num_layers=args.num_layers,
     ).to(device)
 
-    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-5) # 1e-4
 
     best_val = float("inf")
     train_losses = []
