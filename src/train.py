@@ -200,7 +200,7 @@ def main():
     ap.add_argument("--batch_size", type=int, default=64) #64
     ap.add_argument("--epochs", type=int, default=30) #50
     ap.add_argument("--lr", type=float, default=5e-4) #5e-5
-    ap.add_argument("--hidden_dim", type=int, default=64) #128
+    ap.add_argument("--hidden_dim", type=int, default=128) #128
     ap.add_argument("--num_layers", type=int, default=3) #3
     ap.add_argument(
         "--consistency_loss",
