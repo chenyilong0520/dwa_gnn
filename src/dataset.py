@@ -174,7 +174,7 @@ def load_xml_graphs(
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base_dir", type=str, default="data/data_raw")
+    ap.add_argument("--base_dir", type=str, default="data/data_raw_goal")
     ap.add_argument("--out_dir", type=str, default="data/data_processed")
     ap.add_argument("--augmented_out_dir", type=str, default="data/data_augmented")
     ap.add_argument("--xml_name", type=str, default="output4.xml")
