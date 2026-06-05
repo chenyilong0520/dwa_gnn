@@ -130,7 +130,7 @@ def load_xml_graphs(
         p_prev_global = Pg_all[t - k]
         v_prev_global = Vg_all[t - k]
 
-        # Filter by nearest pedestrian distance (current frame)
+        # Filter by nearest pedestrian/target distance (current frame)
         dmin = nearest_ped_distance(x_curr)
         keep = (dmin < d_thresh) if strict_less else (dmin <= d_thresh)
         if not keep:

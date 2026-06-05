@@ -253,9 +253,10 @@ def parse_frame_to_node_features(
     x[:, 0:2] = pos_rel
     x[:, 2:4] = vel_rel
 
-    # is_robot feature (robot is always node 0)
+    # is_robot feature (robot is always node 0, target point is the last node)
     x[:, 4] = 0.0
     x[0, 4] = 1.0
+    x[-1, 4] = -1.0
 
     return x, p_robot_global, v_robot_global
 
