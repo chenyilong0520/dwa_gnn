@@ -159,7 +159,8 @@ def main():
 
     x_node = preprocess_frame_to_node_features(frame_nx5)
     #edge_index, edge_attr = build_bidirectional_star(x_node)
-    edge_index, edge_attr = build_directional_star(x_node)
+    #edge_index, edge_attr = build_directional_star(x_node)
+    edge_index, edge_attr = build_bidirectional_star(x_node)
     data = Data(
         x=torch.from_numpy(x_node),
         edge_index=torch.from_numpy(edge_index),
@@ -169,7 +170,8 @@ def main():
     x_node_aug = np.asarray(x_node, dtype=np.float32).copy()
     x_node_aug[:, 1] *= -1.0
     x_node_aug[:, 3] *= -1.0
-    edge_index_aug, edge_attr_aug = build_directional_star(x_node_aug)
+    #edge_index_aug, edge_attr_aug = build_directional_star(x_node_aug)
+    edge_index_aug, edge_attr_aug = build_bidirectional_star(x_node_aug)
     data_aug = Data(
         x=torch.from_numpy(x_node_aug),
         edge_index=torch.from_numpy(edge_index_aug),

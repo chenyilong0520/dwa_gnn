@@ -27,6 +27,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 
 from utils import (
     build_directional_star,
+    build_bidirectional_star,
     load_model,
     preprocess_frame_to_node_features,
 )
@@ -190,7 +191,8 @@ class OffsetPlotter:
 
             frame_array = np.asarray(frame_nodes, dtype=np.float32)
             x_node = preprocess_frame_to_node_features(frame_array)
-            edge_index, edge_attr = build_directional_star(x_node)
+            #edge_index, edge_attr = build_directional_star(x_node)
+            edge_index, edge_attr = build_bidirectional_star(x_node)
             return frame_array, x_node, edge_index, edge_attr
 
     def predict_offset(self, x_node: np.ndarray, frame_array: np.ndarray, edge_index: np.ndarray, edge_attr: np.ndarray) -> np.ndarray:

@@ -24,6 +24,7 @@ from utils import (
     build_directional_star,
     load_model,
     preprocess_frame_to_node_features,
+    build_bidirectional_star,
 )
 
 
@@ -74,7 +75,8 @@ def predict_offset_at_frame(
         [2] array with predicted offset (global frame)
     """
     x_node = preprocess_frame_to_node_features(frame_nx5)
-    edge_index, edge_attr = build_directional_star(x_node)
+    #edge_index, edge_attr = build_directional_star(x_node)
+    edge_index, edge_attr = build_bidirectional_star(x_node)
     
     data = Data(
         x=torch.from_numpy(x_node),
@@ -239,7 +241,7 @@ def main() -> None:
         [0.0, -2.0],
         [0.0, 2.0],
     ], dtype=np.float32)
-    robot_trajectory = sample_trajectory_from_waypoints(robot_waypoints, samples_per_segment=2)
+    robot_trajectory = sample_trajectory_from_waypoints(robot_waypoints, samples_per_segment=10)
 
     # ============================================================
     # Simple pedestrian positions (fixed for demonstration)
@@ -249,7 +251,7 @@ def main() -> None:
     ], dtype=np.float32)
 
     pedestrian_velocities = np.array([
-        [-0.5, 0.0]
+        [0.0, -0.5]
     ], dtype=np.float32)
 
     # ============================================================

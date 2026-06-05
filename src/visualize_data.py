@@ -233,7 +233,7 @@ def main() -> None:
     parser.add_argument(
         "--input",
         type=str,
-        default="data/data_raw",
+        default="data/data_raw/3",
         help="Path to a raw XML file or to a data_raw sequence directory.",
     )
     parser.add_argument(

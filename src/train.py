@@ -311,7 +311,7 @@ def main():
         num_layers=args.num_layers,
     ).to(device)
 
-    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-5) # 1e-4
+    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4) # 1e-4
 
     best_val = float("inf")
     train_losses = []

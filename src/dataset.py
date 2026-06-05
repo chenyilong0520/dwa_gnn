@@ -136,8 +136,8 @@ def load_xml_graphs(
         if not keep:
             continue
 
-        #edge_index, edge_attr = build_bidirectional_star(x_curr)
-        edge_index, edge_attr = build_directional_star(x_curr)
+        edge_index, edge_attr = build_bidirectional_star(x_curr)
+        # edge_index, edge_attr = build_directional_star(x_curr)
         y = robot_cv_residual_label(
             p_curr_global=p_curr_global,
             p_prev_global=p_prev_global,
