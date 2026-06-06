@@ -153,14 +153,20 @@ def flip_graph_sample_y(
 
 
 def save_graph_samples_npz(npz_path: str, samples) -> None:
+    def to_object_array(items):
+        arr = np.empty(len(items), dtype=object)
+        for i, item in enumerate(items):
+            arr[i] = item
+        return arr
+
     os.makedirs(os.path.dirname(npz_path), exist_ok=True)
     np.savez_compressed(
         npz_path,
-        xs=np.array([s.x for s in samples], dtype=object),
-        edge_indices=np.array([s.edge_index for s in samples], dtype=object),
-        edge_attrs=np.array([s.edge_attr for s in samples], dtype=object),
+        xs=to_object_array([s.x for s in samples]),
+        edge_indices=to_object_array([s.edge_index for s in samples]),
+        edge_attrs=to_object_array([s.edge_attr for s in samples]),
         ys=np.array([s.y for s in samples], dtype=np.float32),
-        metas=np.array([s.meta for s in samples], dtype=object),
+        metas=to_object_array([s.meta for s in samples]),
     )
 
 # =========================

@@ -105,9 +105,9 @@ def predict_offset_at_frame(
     else:
         y_hat = y_hat_local
     
-    print("------------------------------------------------------------------------------")
-    print("data",data.x.numpy(),data.edge_index.numpy(),data.edge_attr.numpy())
-    print(f"Predicted CV residual [dx, dy] (local): {y_hat_local.tolist()}")
+    #print("------------------------------------------------------------------------------")
+    #print("data",data.x.numpy(),data.edge_index.numpy(),data.edge_attr.numpy())
+    #print(f"Predicted CV residual [dx, dy] (local): {y_hat_local.tolist()}")
     #print(f"Predicted CV residual [dx, dy] (global): {y_hat.tolist()}")
     
     return y_hat
@@ -247,11 +247,11 @@ def main() -> None:
     # Simple pedestrian positions (fixed for demonstration)
     # ============================================================
     pedestrian_positions = np.array([
-        [-2.0, 0.0]
+        [-1.5, 0.0]
     ], dtype=np.float32)
 
     pedestrian_velocities = np.array([
-        [1.5, 0.0]
+        [0.0, 2.0]
     ], dtype=np.float32)
 
     # ============================================================
@@ -282,7 +282,7 @@ def main() -> None:
             direction = robot_trajectory[i] - robot_trajectory[i-1]
             direction_norm = np.linalg.norm(direction)
             if direction_norm > 1e-6:
-                robot_vel = 0.5 * (direction / direction_norm)
+                robot_vel = 2.0 * (direction / direction_norm)
             else:
                 robot_vel = np.array([0.0, 0.0], dtype=np.float32)
 

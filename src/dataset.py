@@ -30,6 +30,7 @@ Assumptions:
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -77,6 +78,85 @@ def augment_samples_flip_y(samples: List[GraphSample]) -> List[GraphSample]:
     return augmented_samples
 
 
+def compute_node_feature_stats(samples: List[GraphSample]) -> Dict[str, Dict[str, float]]:
+    """
+    Compute min/max for each node feature across all nodes in all samples.
+    """
+    feature_names = ["x_rel", "y_rel", "vx_rel", "vy_rel", "is_robot"]
+    if not samples:
+        return {}
+
+    all_x = np.concatenate([sample.x for sample in samples], axis=0)
+    feature_mins = np.min(all_x, axis=0)
+    feature_maxs = np.max(all_x, axis=0)
+
+    stats: Dict[str, Dict[str, float]] = {}
+    for idx, feature_name in enumerate(feature_names):
+        stats[feature_name] = {
+            "min": float(feature_mins[idx]),
+            "max": float(feature_maxs[idx]),
+        }
+    return stats
+
+
+def print_node_feature_stats(dataset_name: str, stats: Dict[str, Dict[str, float]]) -> None:
+    """
+    Print min/max for each node feature.
+    """
+    print(f"\n=== Node feature stats: {dataset_name} ===")
+    if not stats:
+        print("No samples available.")
+        return
+
+    for feature_name, feature_stats in stats.items():
+        print(
+            f"{feature_name:>8}: min={feature_stats['min']: .6f}, "
+            f"max={feature_stats['max']: .6f}"
+        )
+
+
+def save_node_feature_stats_json(
+    json_path: str,
+    processed_stats: Dict[str, Dict[str, float]],
+    augmented_stats: Dict[str, Dict[str, float]],
+) -> None:
+    """
+    Save node feature ranges to JSON for later normalization.
+    """
+    os.makedirs(os.path.dirname(json_path), exist_ok=True)
+    payload = {
+        "data_processed": processed_stats,
+        "data_augmented": augmented_stats,
+    }
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    print(f"Saved node feature stats JSON → {json_path}")
+
+
+def filter_nodes_by_radius(
+    x: np.ndarray,
+    node_inclusion_radius: float,
+) -> np.ndarray:
+    """
+    Keep robot node 0 and keep only non-robot nodes within the given radius.
+    This radius applies to both pedestrians and the target node.
+    """
+    if x.shape[0] <= 1:
+        return x
+
+    other_positions = x[1:, 0:2]
+    other_distances = np.linalg.norm(other_positions, axis=1)
+    other_keep_indices = np.where(other_distances <= node_inclusion_radius)[0] + 1
+
+    keep_indices = np.concatenate(
+        [
+            np.array([0], dtype=np.int64),
+            other_keep_indices.astype(np.int64),
+        ]
+    )
+    return x[keep_indices]
+
+
 # =========================
 # Main loader
 # =========================
@@ -86,6 +166,7 @@ def load_xml_graphs(
     frame_rate: float = 60.0,
     k_horizon_frames: int = 1,
     d_thresh: float = 1.0,
+    node_inclusion_radius: float = 4.0,
     strict_less: bool = True,
 ) -> List[GraphSample]:
     """
@@ -94,6 +175,7 @@ def load_xml_graphs(
       - edge features computed from those
       - robot CV residual label using GLOBAL robot position and velocity
       - filter frames by nearest pedestrian distance threshold
+      - keep only non-robot nodes within node_inclusion_radius
 
     Skips first k frames (cannot label).
     """
@@ -130,11 +212,13 @@ def load_xml_graphs(
         p_prev_global = Pg_all[t - k]
         v_prev_global = Vg_all[t - k]
 
-        # Filter by nearest pedestrian/target distance (current frame)
+        # Filter by nearest pedestrian distance (target excluded)
         dmin = nearest_ped_distance(x_curr)
         keep = (dmin < d_thresh) if strict_less else (dmin <= d_thresh)
         if not keep:
             continue
+
+        x_curr = filter_nodes_by_radius(x_curr, node_inclusion_radius)
 
         edge_index, edge_attr = build_bidirectional_star(x_curr)
         # edge_index, edge_attr = build_directional_star(x_curr)
@@ -181,6 +265,7 @@ if __name__ == "__main__":
     ap.add_argument("--frame_rate", type=float, default=60.0)
     ap.add_argument("--k_horizon_frames", type=int, default=60)
     ap.add_argument("--d_thresh", type=float, default=2.5)
+    ap.add_argument("--node_inclusion_radius", type=float, default=4.0)
     ap.add_argument("--strict_less", action="store_true", default=True)
     ap.add_argument("--non_strict_less", dest="strict_less", action="store_false")
     ap.add_argument(
@@ -219,7 +304,10 @@ if __name__ == "__main__":
 
     # 2) Process each discovered sequence
     all_datasets = {}  # folder_name -> samples
+    all_processed_samples: List[GraphSample] = []
+    all_augmented_samples: List[GraphSample] = []
     kept_frames_total = 0
+    stats_json_path = os.path.join("data", "node_feature_stats.json")
 
     for folder in seq_folders:
         xml_path = os.path.join(args.base_dir, folder, args.xml_name)
@@ -230,10 +318,12 @@ if __name__ == "__main__":
             frame_rate=args.frame_rate,
             k_horizon_frames=args.k_horizon_frames,
             d_thresh=args.d_thresh,
+            node_inclusion_radius=args.node_inclusion_radius,
             strict_less=args.strict_less,
         )
 
         all_datasets[folder] = samples
+        all_processed_samples.extend(samples)
 
         kept_frames = [s.meta["t"] for s in samples]
         kept_frames_total += len(kept_frames)
@@ -254,6 +344,7 @@ if __name__ == "__main__":
         if args.write_augmented:
             # 4) Create and save augmented dataset
             augmented_samples = augment_samples_flip_y(samples)
+            all_augmented_samples.extend(augmented_samples)
             augmented_out_file = os.path.join(
                 args.augmented_out_dir,
                 f"gnn_dataset_{folder}_flip_y.npz",
@@ -261,3 +352,9 @@ if __name__ == "__main__":
             save_graph_samples_npz(augmented_out_file, augmented_samples)
             print(f"Saved augmented → {augmented_out_file}")
     print(f"\nKept {kept_frames_total} total frames")
+    processed_stats = compute_node_feature_stats(all_processed_samples)
+    augmented_stats = compute_node_feature_stats(all_augmented_samples)
+    print_node_feature_stats("data_processed", processed_stats)
+    if args.write_augmented:
+        print_node_feature_stats("data_augmented", augmented_stats)
+    save_node_feature_stats_json(stats_json_path, processed_stats, augmented_stats)
