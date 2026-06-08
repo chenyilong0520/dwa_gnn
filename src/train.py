@@ -209,8 +209,9 @@ def main():
         default=False,
         help="Enable consistency regularization with Gaussian noise on pedestrian pos/vel.",
     )
+    # lambda_cons=0.1, sigma_pos=0.03, sigma_vel=0.05
     ap.add_argument("--lambda_cons", type=float, default=0.1, help="Weight for consistency loss.")
-    ap.add_argument("--sigma_pos", type=float, default=0.03, help="Std of Gaussian noise added to pedestrian positions.")
+    ap.add_argument("--sigma_pos", type=float, default=0.05, help="Std of Gaussian noise added to pedestrian positions.")
     ap.add_argument("--sigma_vel", type=float, default=0.05, help="Std of Gaussian noise added to pedestrian velocities.")
     ap.add_argument(
         "--no_supervise_noisy",

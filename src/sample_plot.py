@@ -246,13 +246,31 @@ def main() -> None:
     # ============================================================
     # Simple pedestrian positions (fixed for demonstration)
     # ============================================================
-    pedestrian_positions = np.array([
-        [-1.5, 0.0]
-    ], dtype=np.float32)
-
-    pedestrian_velocities = np.array([
-        [0.0, 2.0]
-    ], dtype=np.float32)
+    
+    # test case 1: left-down
+    # pedestrian_positions = np.array([[-1.5, 0.0]], dtype=np.float32)
+    # pedestrian_velocities = np.array([[0.0, -2.0]], dtype=np.float32)
+    # test case 2: right-down
+    pedestrian_positions = np.array([[1.5, 0.0]], dtype=np.float32)
+    pedestrian_velocities = np.array([[0.0, -2.0]], dtype=np.float32)
+    # test case 3: left-up
+    # pedestrian_positions = np.array([[-1.5, 0.0]], dtype=np.float32)
+    # pedestrian_velocities = np.array([[0.0, 2.0]], dtype=np.float32)
+    # test case 4: right-up
+    # pedestrian_positions = np.array([[1.5, 0.0]], dtype=np.float32)
+    # pedestrian_velocities = np.array([[0.0, 2.0]], dtype=np.float32)
+    # test case 5: left-right
+    # pedestrian_positions = np.array([[-1.5, 0.0]], dtype=np.float32)
+    # pedestrian_velocities = np.array([[2.0, 0.0]], dtype=np.float32)
+    # test case 6: right-left
+    # pedestrian_positions = np.array([[1.5, 0.0]], dtype=np.float32)
+    # pedestrian_velocities = np.array([[-2.0, 0.0]], dtype=np.float32)
+    # test case 7: left-left
+    # pedestrian_positions = np.array([[-1.5, 0.0]], dtype=np.float32)
+    # pedestrian_velocities = np.array([[-2.0, 0.0]], dtype=np.float32)
+    # test case 8: right-right
+    # pedestrian_positions = np.array([[1.5, 0.0]], dtype=np.float32)
+    # pedestrian_velocities = np.array([[2.0, 0.0]], dtype=np.float32)
 
     # ============================================================
     # Load model
