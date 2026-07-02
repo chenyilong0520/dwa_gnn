@@ -30,6 +30,7 @@ import os
 import re
 import argparse
 import copy
+import json
 from dataclasses import dataclass
 from typing import List, Tuple, Optional
 
@@ -110,13 +111,30 @@ def make_noisy_batch(batch, sigma_pos: float, sigma_vel: float):
     return noisy_batch
 
 
+def make_symmetry_batch(batch):
+    symmetry_batch = copy.copy(batch)
+    x_sym = batch.x.clone()
+    y_sym = batch.y.clone()
+
+    x_sym[:, 1] *= -1.0
+    x_sym[:, 3] *= -1.0
+    y_sym[..., 1] *= -1.0
+
+    symmetry_batch.x = x_sym
+    symmetry_batch.y = y_sym
+    symmetry_batch.edge_attr = compute_edge_attr_torch(x_sym, batch.edge_index)
+    return symmetry_batch
+
+
 def train_one_epoch(
     model: nn.Module,
     loader: DataLoader,
     opt: torch.optim.Optimizer,
     device: torch.device,
     use_consistency_loss: bool = False,
+    use_symmetry_loss: bool = False,
     lambda_cons: float = 0.1,
+    lambda_sym: float = 0.1,
     sigma_pos: float = 0.03,
     sigma_vel: float = 0.05,
     supervise_noisy: bool = True,
@@ -139,6 +157,14 @@ def train_one_epoch(
             if supervise_noisy:
                 loss = loss + F.mse_loss(noisy_pred, y)
 
+        if use_symmetry_loss:
+            symmetry_batch = make_symmetry_batch(batch)
+            symmetry_pred = model(symmetry_batch)
+            pred_expected_symmetry = pred.clone()
+            pred_expected_symmetry[:, 1] *= -1.0
+            symmetry_loss = F.mse_loss(symmetry_pred, pred_expected_symmetry)
+            loss = loss + lambda_sym * symmetry_loss
+
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), 5.0)
         opt.step()
@@ -153,6 +179,43 @@ def format_float_for_filename(value: float) -> str:
     Example: 1e-4 -> 1e-04, 0.0003 -> 3e-04.
     """
     return f"{value:.0e}"
+
+
+def extract_sequence_number(npz_path: str) -> int:
+    """
+    Extract the trailing integer from names like gnn_dataset_12.npz.
+    """
+    stem = os.path.splitext(os.path.basename(npz_path))[0]
+    match = re.search(r"(\d+)$", stem)
+    if match is None:
+        raise ValueError(f"Could not extract sequence number from '{npz_path}'")
+    return int(match.group(1))
+
+
+def load_filtered_sequence_numbers(json_path: str) -> List[int]:
+    """
+    Load the selected sequence numbers from JSON.
+    Accepts either a raw list or a dict containing a list under a common key.
+    """
+    with open(json_path, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+
+    if isinstance(payload, list):
+        values = payload
+    elif isinstance(payload, dict):
+        for key in ("filtered_files", "files", "sequence_numbers", "selected"):
+            if key in payload:
+                values = payload[key]
+                break
+        else:
+            raise ValueError(
+                f"Expected a list or one of keys "
+                f"('filtered_files', 'files', 'sequence_numbers', 'selected') in {json_path}"
+            )
+    else:
+        raise ValueError(f"Unsupported JSON structure in {json_path}")
+
+    return [int(v) for v in values]
 
 
 # ----------------------------
@@ -197,22 +260,29 @@ def main():
         action="store_false",
         help="Disable augmented NPZ files for the validation split.",
     )
-    ap.add_argument("--batch_size", type=int, default=128) #64
-    ap.add_argument("--epochs", type=int, default=20) #50
-    ap.add_argument("--lr", type=float, default=5e-4) #5e-5
-    ap.add_argument("--hidden_dim", type=int, default=64) #128
-    ap.add_argument("--num_layers", type=int, default=3) #3
-    ap.add_argument("--weight_decay", type=float, default=5e-4) #1e-4
+    ap.add_argument("--batch_size", type=int, default=128)
+    ap.add_argument("--epochs", type=int, default=20)
+    ap.add_argument("--lr", type=float, default=5e-4)
+    ap.add_argument("--hidden_dim", type=int, default=64)
+    ap.add_argument("--num_layers", type=int, default=3)
+    ap.add_argument("--weight_decay", type=float, default=5e-4)
     ap.add_argument(
         "--consistency_loss",
         action="store_true",
         default=False,
         help="Enable consistency regularization with Gaussian noise on pedestrian pos/vel.",
     )
-    # lambda_cons=0.1, sigma_pos=0.03, sigma_vel=0.05
+    ap.add_argument(
+        "--symmetry_loss",
+        action="store_true",
+        default=False,
+        help="Enable y-flip equivariance regularization on mirrored inputs.",
+    )
+    # lambda_sym=0.5
     ap.add_argument("--lambda_cons", type=float, default=0.1, help="Weight for consistency loss.")
-    ap.add_argument("--sigma_pos", type=float, default=0.05, help="Std of Gaussian noise added to pedestrian positions.")
-    ap.add_argument("--sigma_vel", type=float, default=0.05, help="Std of Gaussian noise added to pedestrian velocities.")
+    ap.add_argument("--lambda_sym", type=float, default=0.5, help="Weight for symmetry loss.")
+    ap.add_argument("--sigma_pos", type=float, default=0.02, help="Std of Gaussian noise added to pedestrian positions.")
+    ap.add_argument("--sigma_vel", type=float, default=0.02, help="Std of Gaussian noise added to pedestrian velocities.")
     ap.add_argument(
         "--no_supervise_noisy",
         dest="supervise_noisy",
@@ -223,6 +293,12 @@ def main():
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--val_ratio", type=float, default=0.2, help="Fraction of sequences used for validation")
     ap.add_argument("--save_path", type=str, default="gnn_model.pt")
+    ap.add_argument(
+        "--filtered_files_json",
+        type=str,
+        default=None,
+        help="Optional JSON file listing sequence numbers to keep before the train/val split.",
+    )
     args = ap.parse_args()
 
     set_seed(args.seed)
@@ -231,6 +307,22 @@ def main():
     npz_files = discover_npz_files(args.npz_dir)
     if len(npz_files) == 0:
         raise FileNotFoundError(f"No gnn_dataset_*.npz found in {args.npz_dir}")
+
+    if args.filtered_files_json is not None:
+        selected_numbers = set(load_filtered_sequence_numbers(args.filtered_files_json))
+        npz_files = [
+            path for path in npz_files
+            if extract_sequence_number(path) in selected_numbers
+        ]
+        if len(npz_files) == 0:
+            raise FileNotFoundError(
+                "No gnn_dataset_*.npz matched the sequence numbers from "
+                f"{args.filtered_files_json}"
+            )
+        print(
+            f"Filtered NPZ sequences using {args.filtered_files_json}: "
+            f"{len(npz_files)} selected"
+        )
 
     # Sequence-level split (recommended): hold out whole sequences for val
     num_seqs = len(npz_files)
@@ -325,7 +417,9 @@ def main():
             opt,
             device,
             use_consistency_loss=args.consistency_loss,
+            use_symmetry_loss=args.symmetry_loss,
             lambda_cons=args.lambda_cons,
+            lambda_sym=args.lambda_sym,
             sigma_pos=args.sigma_pos,
             sigma_vel=args.sigma_vel,
             supervise_noisy=args.supervise_noisy,
