@@ -31,9 +31,10 @@ from utils import (
 )
 
 Point3 = Tuple[float, float, float]  # (x, y, timestamp)
+TrackedState = Tuple[float, float, float, float, float]  # (x, y, vx, vy, timestamp)
 
 
-class PedestrianEKF:
+class ConstantVelocityEKF:
     def __init__(
         self,
         process_noise_position: float = 0.5,
@@ -130,6 +131,8 @@ class OffsetPlotter:
         self.data_lock = Lock()
 
         self.sensor_positions: List[Point3] = []
+        self.sensor_filtered_states: List[TrackedState] = []
+        self.sensor_ekf = ConstantVelocityEKF()
         self.pedestrian_tracks: Dict[str, Dict[str, Any]] = {}
         self.offset_positions: List[Tuple[float, float]] = []
         self.last_predicted_offset: Optional[np.ndarray] = None
@@ -153,7 +156,37 @@ class OffsetPlotter:
             return
         with self.data_lock:
             timestamp = msg.header.stamp.to_sec()
-            self.sensor_positions.append((msg.pose.position.x, msg.pose.position.y, timestamp))
+            curr_x = msg.pose.position.x
+            curr_y = msg.pose.position.y
+
+            if self.sensor_positions:
+                prev_x, prev_y, prev_t = self.sensor_positions[-1]
+                dt = timestamp - prev_t
+                distance = np.hypot(curr_x - prev_x, curr_y - prev_y)
+                if dt <= 0.0 or dt > self.max_time_gap or distance > self.max_distance_gap:
+                    self.sensor_positions.clear()
+                    self.sensor_filtered_states.clear()
+                    self.offset_positions.clear()
+                    self.last_sensor_index = 0
+                    self.sensor_ekf = ConstantVelocityEKF()
+                else:
+                    self.sensor_ekf.predict(dt)
+            else:
+                self.sensor_ekf.initialize(curr_x, curr_y)
+
+            self.sensor_positions.append((curr_x, curr_y, timestamp))
+            if self.sensor_ekf.state is None:
+                self.sensor_ekf.initialize(curr_x, curr_y)
+            updated_state = self.sensor_ekf.update(np.array([curr_x, curr_y], dtype=np.float64))
+            self.sensor_filtered_states.append(
+                (
+                    float(updated_state[0]),
+                    float(updated_state[1]),
+                    float(updated_state[2]),
+                    float(updated_state[3]),
+                    timestamp,
+                )
+            )
 
     def pedestrian_callback(self, msg: MarkerArray) -> None:
         for marker in msg.markers:
@@ -171,13 +204,13 @@ class OffsetPlotter:
                         "positions": [],
                         "filtered_states": [],
                         "color": color,
-                        "ekf": PedestrianEKF(),
+                        "ekf": ConstantVelocityEKF(),
                     },
                 )
                 track["color"] = color
                 positions = track["positions"]
                 filtered_states = track["filtered_states"]
-                ekf: PedestrianEKF = track["ekf"]
+                ekf: ConstantVelocityEKF = track["ekf"]
 
                 if positions:
                     prev_x, prev_y, prev_t = positions[-1]
@@ -186,7 +219,7 @@ class OffsetPlotter:
                     if dt <= 0.0 or dt > self.max_time_gap or distance > self.max_distance_gap:
                         positions.clear()
                         filtered_states.clear()
-                        ekf = PedestrianEKF()
+                        ekf = ConstantVelocityEKF()
                         track["ekf"] = ekf
                     else:
                         ekf.predict(dt)
@@ -213,8 +246,8 @@ class OffsetPlotter:
     def compute_tracking_data(self) -> Dict[str, Dict[str, Any]]:
         with self.data_lock:
             current_sensor_pos = None
-            if self.sensor_positions:
-                current_sensor_pos = np.array(self.sensor_positions[-1][:2])
+            if self.sensor_filtered_states:
+                current_sensor_pos = np.array(self.sensor_filtered_states[-1][:2], dtype=np.float32)
 
             ped_tracks: Dict[str, Dict[str, Any]] = {}
             for track_id, track in self.pedestrian_tracks.items():
@@ -251,14 +284,10 @@ class OffsetPlotter:
 
     def build_live_graph(self) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
         with self.data_lock:
-            if len(self.sensor_positions) < 2:
+            if len(self.sensor_filtered_states) < 2:
                 return None
-            curr_x, curr_y, curr_t = self.sensor_positions[-1]
-            prev_x, prev_y, prev_t = self.sensor_positions[-2]
-            dt = curr_t - prev_t
-            if dt <= 0.0:
-                return None
-            robot_vel = np.array([(curr_x - prev_x) / dt, (curr_y - prev_y) / dt], dtype=np.float32)
+            curr_x, curr_y, curr_vx, curr_vy, _ = self.sensor_filtered_states[-1]
+            robot_vel = np.array([curr_vx, curr_vy], dtype=np.float32)
 
             frame_nodes: List[List[float]] = []
             frame_nodes.append([curr_x, curr_y, robot_vel[0], robot_vel[1], 1.0])
@@ -402,7 +431,7 @@ class OffsetPlotter:
 
         ped_tracks = self.compute_tracking_data()
         with self.data_lock:
-            sensor_positions = list(self.sensor_positions)
+            sensor_positions = [(x, y, t) for x, y, _, _, t in self.sensor_filtered_states]
 
         if len(sensor_positions) >= 2:
             graph_data = self.build_live_graph()
@@ -419,11 +448,11 @@ class OffsetPlotter:
         if len(sensor_positions) != self.last_sensor_index:
             # Append an offset entry for every new sensor frame since last update.
             with self.data_lock:
-                for i in range(self.last_sensor_index, len(self.sensor_positions)):
-                    x, y, _ = self.sensor_positions[i]
+                for i in range(self.last_sensor_index, len(self.sensor_filtered_states)):
+                    x, y, _, _, _ = self.sensor_filtered_states[i]
                     new_offset = (x + predicted_offset[0], y + predicted_offset[1])
                     self.offset_positions.append(new_offset)
-                self.last_sensor_index = len(self.sensor_positions)
+                self.last_sensor_index = len(self.sensor_filtered_states)
 
         # Snapshot offsets after the update so drawing sees the latest copy.
         with self.data_lock:
@@ -442,7 +471,7 @@ class OffsetPlotter:
     def save_current_figure(self) -> None:
         ped_tracks = self.compute_tracking_data()
         with self.data_lock:
-            sensor_positions = list(self.sensor_positions)
+            sensor_positions = [(x, y, t) for x, y, _, _, t in self.sensor_filtered_states]
             offset_positions = list(self.offset_positions)
         save_fig = Figure(figsize=(10, 10))
         save_ax = save_fig.subplots()
