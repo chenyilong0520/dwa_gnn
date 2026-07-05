@@ -116,6 +116,7 @@ class OffsetPlotter:
         max_time_gap: float,
         max_distance_gap: float,
         min_sensor_distance: float,
+        min_prediction_speed: float,
         show_frame: Optional[int],
     ):
         self.sensor_topic = sensor_topic
@@ -127,6 +128,7 @@ class OffsetPlotter:
         self.max_time_gap = max_time_gap
         self.max_distance_gap = max_distance_gap
         self.min_sensor_distance = min_sensor_distance
+        self.min_prediction_speed = min_prediction_speed
         self.show_frame = show_frame
         self.data_lock = Lock()
 
@@ -321,6 +323,8 @@ class OffsetPlotter:
         # Transform local offset to global
         robot_vx, robot_vy = frame_array[0, 2], frame_array[0, 3]
         speed = np.sqrt(robot_vx**2 + robot_vy**2)
+        if speed < self.min_prediction_speed: # to suppress noise when robot is nearly stationary
+            return np.zeros(2, dtype=np.float32)
         if speed > 1e-6:
             theta = np.arctan2(robot_vy, robot_vx)
             cos_theta = np.cos(theta)
@@ -350,6 +354,7 @@ class OffsetPlotter:
             offset_array = np.array(offset_pos_slice, dtype=np.float32)
             ax.plot(offset_array[:, 0], offset_array[:, 1], color="tab:red", linewidth=2.0, linestyle="--", label="predicted offset trajectory")
             ax.scatter(offset_array[-1, 0], offset_array[-1, 1], c="tab:red", s=100, marker="x")
+        #print(len(sensor_pos_slice), len(offset_pos_slice), len(ped_tracks))
 
         if self.last_predicted_offset is not None and sensor_pos_slice:
             curr_x, curr_y, _ = sensor_pos_slice[-1]
@@ -492,6 +497,7 @@ def main() -> None:
     ap.add_argument("--max-time-gap", type=float, default=0.2, help="Max time gap (seconds) to consider same object.")
     ap.add_argument("--max-distance-gap", type=float, default=0.5, help="Max distance gap (meters) to consider same object.")
     ap.add_argument("--min-sensor-distance", type=float, default=0.2, help="Minimum distance from sensor to consider pedestrian valid (filter false positives).")
+    ap.add_argument("--min-prediction-speed", type=float, default=0.5, help="Suppress predicted offset when robot linear speed is below this threshold.")
     ap.add_argument("--show-frame", type=int, default=None, help="Number of recent frames to show in trajectories. If not set, show all history.")
     args = ap.parse_args()
 
@@ -507,6 +513,7 @@ def main() -> None:
         max_time_gap=args.max_time_gap,
         max_distance_gap=args.max_distance_gap,
         min_sensor_distance=args.min_sensor_distance,
+        min_prediction_speed=args.min_prediction_speed,
         show_frame=args.show_frame,
     )
 

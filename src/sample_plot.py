@@ -90,6 +90,9 @@ def predict_offset_at_frame(
     # Transform local offset to global
     robot_vx, robot_vy = frame_nx5[0, 2], frame_nx5[0, 3]
     speed = np.sqrt(robot_vx**2 + robot_vy**2)
+    
+    if speed < 0.5: # to suppress noise when robot is nearly stationary
+        return np.zeros(2, dtype=np.float32)
     if speed > 1e-6:
         theta = np.arctan2(robot_vy, robot_vx)
     elif fallback_theta is not None:
@@ -248,8 +251,8 @@ def main() -> None:
     # ============================================================
     
     # test case 1: left-down
-    # pedestrian_positions = np.array([[-1.5, 0.0]], dtype=np.float32)
-    # pedestrian_velocities = np.array([[0.0, -2.0]], dtype=np.float32)
+    pedestrian_positions = np.array([[-1.5, 0.0]], dtype=np.float32)
+    pedestrian_velocities = np.array([[0.0, -2.0]], dtype=np.float32)
     # # test case 2: right-down
     # pedestrian_positions = np.array([[1.5, 0.0]], dtype=np.float32)
     # pedestrian_velocities = np.array([[0.0, -2.0]], dtype=np.float32)
@@ -269,8 +272,8 @@ def main() -> None:
     # pedestrian_positions = np.array([[-1.5, 0.0]], dtype=np.float32)
     # pedestrian_velocities = np.array([[-2.0, 0.0]], dtype=np.float32)
     # test case 8: right-right
-    pedestrian_positions = np.array([[1.5, 0.0]], dtype=np.float32)
-    pedestrian_velocities = np.array([[2.0, 0.0]], dtype=np.float32)
+    # pedestrian_positions = np.array([[1.5, 0.0]], dtype=np.float32)
+    # pedestrian_velocities = np.array([[2.0, 0.0]], dtype=np.float32)
 
     # ============================================================
     # Load model
@@ -293,14 +296,14 @@ def main() -> None:
             direction = robot_trajectory[i+1] - robot_trajectory[i]
             direction_norm = np.linalg.norm(direction)
             if direction_norm > 1e-6:
-                robot_vel = 0.5 * (direction / direction_norm)
+                robot_vel = 0.0 * (direction / direction_norm) #0.5
             else:   
                 robot_vel = np.array([0.0, 0.0], dtype=np.float32)
         else:
             direction = robot_trajectory[i] - robot_trajectory[i-1]
             direction_norm = np.linalg.norm(direction)
             if direction_norm > 1e-6:
-                robot_vel = 2.0 * (direction / direction_norm)
+                robot_vel = 0.0 * (direction / direction_norm) #2.0
             else:
                 robot_vel = np.array([0.0, 0.0], dtype=np.float32)
 
