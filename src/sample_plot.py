@@ -272,8 +272,8 @@ def main() -> None:
     # pedestrian_positions = np.array([[-1.5, 0.0]], dtype=np.float32)
     # pedestrian_velocities = np.array([[-2.0, 0.0]], dtype=np.float32)
     # test case 8: right-right
-    pedestrian_positions = np.array([[1.5, 0.0]], dtype=np.float32)
-    pedestrian_velocities = np.array([[2.0, 0.0]], dtype=np.float32)
+    # pedestrian_positions = np.array([[1.5, 0.0]], dtype=np.float32)
+    # pedestrian_velocities = np.array([[2.0, 0.0]], dtype=np.float32)
 
     # ============================================================
     # Load model

@@ -117,6 +117,7 @@ class OffsetPlotter:
         max_time_gap: float,
         max_distance_gap: float,
         min_sensor_distance: float,
+        min_track_states: int,
         min_prediction_speed: float,
         write_record: bool,
         record_path: str,
@@ -131,6 +132,7 @@ class OffsetPlotter:
         self.max_time_gap = max_time_gap
         self.max_distance_gap = max_distance_gap
         self.min_sensor_distance = min_sensor_distance
+        self.min_track_states = min_track_states
         self.min_prediction_speed = min_prediction_speed
         self.write_record = write_record
         self.record_path = record_path
@@ -259,21 +261,34 @@ class OffsetPlotter:
             self.window_closed = True
             plt.close(self.fig)
 
-    def snapshot_latest_pedestrians(self, sensor_x: float, sensor_y: float) -> List[Dict[str, Any]]:
-        pedestrians: List[Dict[str, Any]] = []
-        current_sensor_pos = np.array([sensor_x, sensor_y], dtype=np.float32)
-
+    def get_valid_pedestrian_tracks(self, sensor_pos: Optional[np.ndarray]) -> Dict[str, Dict[str, Any]]:
+        valid_tracks: Dict[str, Dict[str, Any]] = {}
         for track_id, track in self.pedestrian_tracks.items():
             filtered_states = track["filtered_states"]
-            if not filtered_states:
+            if len(filtered_states) < self.min_track_states:
                 continue
 
             latest_state = filtered_states[-1]
-            ped_pos = np.array(latest_state[:2], dtype=np.float32)
-            distance_to_sensor = np.linalg.norm(ped_pos - current_sensor_pos)
-            if distance_to_sensor < self.min_sensor_distance:
-                continue
+            if sensor_pos is not None:
+                ped_pos = np.array(latest_state[:2], dtype=np.float32)
+                distance_to_sensor = np.linalg.norm(ped_pos - sensor_pos)
+                if distance_to_sensor < self.min_sensor_distance:
+                    continue
 
+            valid_tracks[track_id] = {
+                "color": track["color"],
+                "filtered_states": list(filtered_states),
+                "latest_state": latest_state,
+            }
+        return valid_tracks
+
+    def snapshot_latest_pedestrians(self, sensor_x: float, sensor_y: float) -> List[Dict[str, Any]]:
+        pedestrians: List[Dict[str, Any]] = []
+        current_sensor_pos = np.array([sensor_x, sensor_y], dtype=np.float32)
+        valid_tracks = self.get_valid_pedestrian_tracks(current_sensor_pos)
+
+        for track_id, track in valid_tracks.items():
+            latest_state = track["latest_state"]
             color = track["color"]
             pedestrians.append(
                 {
@@ -316,18 +331,10 @@ class OffsetPlotter:
                 current_sensor_pos = np.array(self.sensor_filtered_states[-1][:2], dtype=np.float32)
 
             ped_tracks: Dict[str, Dict[str, Any]] = {}
-            for track_id, track in self.pedestrian_tracks.items():
+            valid_tracks = self.get_valid_pedestrian_tracks(current_sensor_pos)
+            for track_id, track in valid_tracks.items():
                 color = track["color"]
                 filtered_states = track["filtered_states"]
-                if len(filtered_states) < 2:
-                    continue
-
-                if current_sensor_pos is not None:
-                    ped_pos = np.array(filtered_states[-1][:2], dtype=np.float32)
-                    distance_to_sensor = np.linalg.norm(ped_pos - current_sensor_pos)
-                    if distance_to_sensor < self.min_sensor_distance:
-                        continue
-
                 segments = []
                 for i in range(1, len(filtered_states)):
                     prev_x, prev_y, _, _, _ = filtered_states[i - 1]
@@ -359,14 +366,9 @@ class OffsetPlotter:
             frame_nodes.append([curr_x, curr_y, robot_vel[0], robot_vel[1], 1.0])
 
             current_sensor_pos = np.array([curr_x, curr_y], dtype=np.float32)
-            for track_id, track in self.pedestrian_tracks.items():
-                filtered_states = track["filtered_states"]
-                if not filtered_states:
-                    continue
-                curr_px, curr_py, curr_vx, curr_vy, _ = filtered_states[-1]
-                distance_to_sensor = np.linalg.norm(np.array([curr_px, curr_py], dtype=np.float32) - current_sensor_pos)
-                if distance_to_sensor < self.min_sensor_distance:
-                    continue
+            valid_tracks = self.get_valid_pedestrian_tracks(current_sensor_pos)
+            for track in valid_tracks.values():
+                curr_px, curr_py, curr_vx, curr_vy, _ = track["latest_state"]
                 frame_nodes.append([curr_px, curr_py, curr_vx, curr_vy, 0.0])
 
             frame_array = np.asarray(frame_nodes, dtype=np.float32)
@@ -599,6 +601,7 @@ def main() -> None:
     ap.add_argument("--max-time-gap", type=float, default=0.2, help="Max time gap (seconds) to consider same object.")
     ap.add_argument("--max-distance-gap", type=float, default=0.5, help="Max distance gap (meters) to consider same object.")
     ap.add_argument("--min-sensor-distance", type=float, default=0.2, help="Minimum distance from sensor to consider pedestrian valid (filter false positives).")
+    ap.add_argument("--min-track-states", type=int, default=2, help="Minimum number of filtered states required before a pedestrian track is considered valid.")
     ap.add_argument("--min-prediction-speed", type=float, default=0.5, help="Suppress predicted offset when robot linear speed is below this threshold.")
     ap.add_argument("--write-record", action="store_true", default=True, help="Write per-frame filtered robot/pedestrian snapshots to a JSON record file.")
     ap.add_argument("--record-path", type=str, default="record.json", help="Path to the JSON record file.")
@@ -617,6 +620,7 @@ def main() -> None:
         max_time_gap=args.max_time_gap,
         max_distance_gap=args.max_distance_gap,
         min_sensor_distance=args.min_sensor_distance,
+        min_track_states=args.min_track_states,
         min_prediction_speed=args.min_prediction_speed,
         write_record=args.write_record,
         record_path=args.record_path,
