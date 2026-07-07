@@ -13,6 +13,7 @@ Example:
 from __future__ import annotations
 
 import argparse
+import json
 from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -117,6 +118,8 @@ class OffsetPlotter:
         max_distance_gap: float,
         min_sensor_distance: float,
         min_prediction_speed: float,
+        write_record: bool,
+        record_path: str,
         show_frame: Optional[int],
     ):
         self.sensor_topic = sensor_topic
@@ -129,6 +132,8 @@ class OffsetPlotter:
         self.max_distance_gap = max_distance_gap
         self.min_sensor_distance = min_sensor_distance
         self.min_prediction_speed = min_prediction_speed
+        self.write_record = write_record
+        self.record_path = record_path
         self.show_frame = show_frame
         self.data_lock = Lock()
 
@@ -139,6 +144,9 @@ class OffsetPlotter:
         self.offset_positions: List[Tuple[float, float]] = []
         self.last_predicted_offset: Optional[np.ndarray] = None
         self.last_sensor_index = 0
+        self.record_frames: List[Dict[str, Any]] = []
+        self.record_frame_index = 0
+        self.results_saved = False
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = load_model(model_path).to(self.device)
@@ -149,6 +157,7 @@ class OffsetPlotter:
         self.fig.show()
         self.window_closed = False
         self.fig.canvas.mpl_connect("close_event", self.on_close)
+        self.fig.canvas.mpl_connect("key_press_event", self.on_key_press)
 
         rospy.Subscriber(self.sensor_topic, Marker, self.sensor_callback, queue_size=200)
         rospy.Subscriber(self.ped_topic, MarkerArray, self.pedestrian_callback, queue_size=500)
@@ -244,6 +253,61 @@ class OffsetPlotter:
 
     def on_close(self, _event) -> None:
         self.window_closed = True
+
+    def on_key_press(self, event) -> None:
+        if event.key in {"q", "escape"}:
+            self.window_closed = True
+            plt.close(self.fig)
+
+    def snapshot_latest_pedestrians(self, sensor_x: float, sensor_y: float) -> List[Dict[str, Any]]:
+        pedestrians: List[Dict[str, Any]] = []
+        current_sensor_pos = np.array([sensor_x, sensor_y], dtype=np.float32)
+
+        for track_id, track in self.pedestrian_tracks.items():
+            filtered_states = track["filtered_states"]
+            if not filtered_states:
+                continue
+
+            latest_state = filtered_states[-1]
+            ped_pos = np.array(latest_state[:2], dtype=np.float32)
+            distance_to_sensor = np.linalg.norm(ped_pos - current_sensor_pos)
+            if distance_to_sensor < self.min_sensor_distance:
+                continue
+
+            color = track["color"]
+            pedestrians.append(
+                {
+                    "track_id": track_id,
+                    "color": [float(color[0]), float(color[1]), float(color[2]), float(color[3])],
+                    "filtered_state": [
+                        float(latest_state[0]),
+                        float(latest_state[1]),
+                        float(latest_state[2]),
+                        float(latest_state[3]),
+                    ],
+                }
+            )
+
+        pedestrians.sort(key=lambda item: item["track_id"])
+        return pedestrians
+
+    def append_record_frame(self, sensor_state: TrackedState, offset_position: Tuple[float, float]) -> None:
+        sensor_x, sensor_y, sensor_vx, sensor_vy, timestamp = sensor_state
+        self.record_frames.append(
+            {
+                "frame_index": self.record_frame_index,
+                "timestamp": float(timestamp),
+                "sensor_filtered_state": [
+                    float(sensor_x),
+                    float(sensor_y),
+                    float(sensor_vx),
+                    float(sensor_vy),
+                ],
+                "offset_position": [float(offset_position[0]), float(offset_position[1])],
+                "pedestrian_tracks": self.snapshot_latest_pedestrians(sensor_x, sensor_y),
+            }
+        )
+        self.record_frame_index += 1
 
     def compute_tracking_data(self) -> Dict[str, Dict[str, Any]]:
         with self.data_lock:
@@ -454,9 +518,12 @@ class OffsetPlotter:
             # Append an offset entry for every new sensor frame since last update.
             with self.data_lock:
                 for i in range(self.last_sensor_index, len(self.sensor_filtered_states)):
-                    x, y, _, _, _ = self.sensor_filtered_states[i]
+                    sensor_state = self.sensor_filtered_states[i]
+                    x, y, _, _, _ = sensor_state
                     new_offset = (x + predicted_offset[0], y + predicted_offset[1])
                     self.offset_positions.append(new_offset)
+                    if self.write_record:
+                        self.append_record_frame(sensor_state, new_offset)
                 self.last_sensor_index = len(self.sensor_filtered_states)
 
         # Snapshot offsets after the update so drawing sees the latest copy.
@@ -469,6 +536,7 @@ class OffsetPlotter:
         try:
             self.fig.tight_layout()
             self.fig.canvas.draw_idle()
+            plt.pause(0.001)
             self.fig.canvas.flush_events()
         except Exception:
             self.window_closed = True
@@ -482,7 +550,41 @@ class OffsetPlotter:
         save_ax = save_fig.subplots()
         self.draw_on_axis(save_ax, sensor_positions, offset_positions, ped_tracks)
         save_fig.savefig(self.save_path)
+        plt.close(save_fig)
         rospy.loginfo("Saved offset plot figure to %s", self.save_path)
+
+    def save_record(self) -> None:
+        if not self.write_record:
+            return
+        with self.data_lock:
+            record_payload = {
+                "frames": list(self.record_frames),
+            }
+        with open(self.record_path, "w", encoding="ascii") as f:
+            json.dump(record_payload, f, indent=2)
+        rospy.loginfo("Saved record file to %s", self.record_path)
+
+    def save_results_once(self) -> None:
+        if self.results_saved:
+            return
+        self.results_saved = True
+
+        try:
+            if self.save_path:
+                self.save_current_figure()
+        except Exception as exc:
+            rospy.logwarn("Failed to save offset plot figure: %s", exc)
+
+        try:
+            self.save_record()
+        except Exception as exc:
+            rospy.logwarn("Failed to save record file: %s", exc)
+
+    def shutdown(self) -> None:
+        self.window_closed = True
+        self.save_results_once()
+        if plt.fignum_exists(self.fig.number):
+            plt.close(self.fig)
 
 
 def main() -> None:
@@ -498,6 +600,8 @@ def main() -> None:
     ap.add_argument("--max-distance-gap", type=float, default=0.5, help="Max distance gap (meters) to consider same object.")
     ap.add_argument("--min-sensor-distance", type=float, default=0.2, help="Minimum distance from sensor to consider pedestrian valid (filter false positives).")
     ap.add_argument("--min-prediction-speed", type=float, default=0.5, help="Suppress predicted offset when robot linear speed is below this threshold.")
+    ap.add_argument("--write-record", action="store_true", default=True, help="Write per-frame filtered robot/pedestrian snapshots to a JSON record file.")
+    ap.add_argument("--record-path", type=str, default="record.json", help="Path to the JSON record file.")
     ap.add_argument("--show-frame", type=int, default=None, help="Number of recent frames to show in trajectories. If not set, show all history.")
     args = ap.parse_args()
 
@@ -514,16 +618,21 @@ def main() -> None:
         max_distance_gap=args.max_distance_gap,
         min_sensor_distance=args.min_sensor_distance,
         min_prediction_speed=args.min_prediction_speed,
+        write_record=args.write_record,
+        record_path=args.record_path,
         show_frame=args.show_frame,
     )
+    rospy.on_shutdown(plotter.shutdown)
 
     rate = rospy.Rate(args.refresh_hz)
-    while not rospy.is_shutdown() and not plotter.window_closed:
-        plotter.redraw()
-        rate.sleep()
-
-    if plotter.save_path:
-        plotter.save_current_figure()
+    try:
+        while not rospy.is_shutdown() and not plotter.window_closed:
+            plotter.redraw()
+            rate.sleep()
+    except KeyboardInterrupt:
+        plotter.shutdown()
+    finally:
+        plotter.shutdown()
 
 
 if __name__ == "__main__":

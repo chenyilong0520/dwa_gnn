@@ -251,8 +251,8 @@ def main() -> None:
     # ============================================================
     
     # test case 1: left-down
-    pedestrian_positions = np.array([[-1.5, 0.0]], dtype=np.float32)
-    pedestrian_velocities = np.array([[0.0, -2.0]], dtype=np.float32)
+    # pedestrian_positions = np.array([[-1.5, 0.0]], dtype=np.float32)
+    # pedestrian_velocities = np.array([[0.0, -2.0]], dtype=np.float32)
     # # test case 2: right-down
     # pedestrian_positions = np.array([[1.5, 0.0]], dtype=np.float32)
     # pedestrian_velocities = np.array([[0.0, -2.0]], dtype=np.float32)
@@ -272,8 +272,8 @@ def main() -> None:
     # pedestrian_positions = np.array([[-1.5, 0.0]], dtype=np.float32)
     # pedestrian_velocities = np.array([[-2.0, 0.0]], dtype=np.float32)
     # test case 8: right-right
-    # pedestrian_positions = np.array([[1.5, 0.0]], dtype=np.float32)
-    # pedestrian_velocities = np.array([[2.0, 0.0]], dtype=np.float32)
+    pedestrian_positions = np.array([[1.5, 0.0]], dtype=np.float32)
+    pedestrian_velocities = np.array([[2.0, 0.0]], dtype=np.float32)
 
     # ============================================================
     # Load model
@@ -296,14 +296,14 @@ def main() -> None:
             direction = robot_trajectory[i+1] - robot_trajectory[i]
             direction_norm = np.linalg.norm(direction)
             if direction_norm > 1e-6:
-                robot_vel = 0.0 * (direction / direction_norm) #0.5
+                robot_vel = 2.0 * (direction / direction_norm) #2.0
             else:   
                 robot_vel = np.array([0.0, 0.0], dtype=np.float32)
         else:
             direction = robot_trajectory[i] - robot_trajectory[i-1]
             direction_norm = np.linalg.norm(direction)
             if direction_norm > 1e-6:
-                robot_vel = 0.0 * (direction / direction_norm) #2.0
+                robot_vel = 2.0 * (direction / direction_norm) #2.0
             else:
                 robot_vel = np.array([0.0, 0.0], dtype=np.float32)
 

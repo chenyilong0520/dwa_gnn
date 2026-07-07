@@ -1,0 +1,15 @@
+record_path: src/record.json
+frame_count: 342
+collision_radius: 1.000000
+
+[original_path]
+path_length: 31.665233
+path_irregularity: 0.775755
+closest_pedestrian_distance: 0.201015
+minimum_time_to_collision: 0.000000
+
+[offset_path]
+path_length: 36.549186
+path_irregularity: 11.585805
+closest_pedestrian_distance: 0.034127
+minimum_time_to_collision: 0.000000
