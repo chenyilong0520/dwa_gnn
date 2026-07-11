@@ -230,39 +230,14 @@ def resolve_xml_path(input_path: str, xml_name: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Visualize raw XML trajectory data.")
-    parser.add_argument(
-        "--input",
-        type=str,
-        default="data/data_raw/3",
-        help="Path to a raw XML file or to a data_raw sequence directory.",
-    )
-    parser.add_argument(
-        "--xml-name",
-        type=str,
-        default="output4.xml",
-        help="XML filename to use when input is a directory.",
-    )
+    parser.add_argument("--input",type=str,default="data/data_raw/1",help="Path to a raw XML file or to a data_raw sequence directory.",)
+    parser.add_argument("--xml-name",type=str,default="output4.xml",help="XML filename to use when input is a directory.",)
     parser.add_argument("--frame-rate", type=float, default=60.0, help="Frame rate used for CV prediction.")
-    parser.add_argument("--k_horizon_frames", type=int, default=60, help="CV horizon in frames.")
+    parser.add_argument("--k_horizon_frames", type=int, default=60, help="CV horizon in frames.")#60
     parser.add_argument("--d_thresh", type=float, default=2.5, help="Distance threshold to keep a frame.")
-    parser.add_argument(
-        "--strict-less",
-        action="store_true",
-        default=True,
-        help="Keep only frames with d_min < d_thresh.",
-    )
-    parser.add_argument(
-        "--non-strict-less",
-        dest="strict_less",
-        action="store_false",
-        help="Keep frames with d_min <= d_thresh.",
-    )
-    parser.add_argument(
-        "--save-path",
-        type=str,
-        default="visualize_data.png",
-        help="Output plot file path.",
-    )
+    parser.add_argument("--strict-less",action="store_true",default=True,help="Keep only frames with d_min < d_thresh.",)
+    parser.add_argument("--non-strict-less",dest="strict_less",action="store_false",help="Keep frames with d_min <= d_thresh.",)
+    parser.add_argument("--save-path",type=str,default="visualize_data.png",help="Output plot file path.",)
     args = parser.parse_args()
 
     xml_path = resolve_xml_path(args.input, args.xml_name)
@@ -285,6 +260,6 @@ def main() -> None:
         save_path=args.save_path,
     )
 
-
+# a standalone script that visualizes raw Unity trajectory data from a single XML file, plotting the robot's global trajectory, pedestrian trajectories, CV-based predicted robot positions, and residual arrows from CV prediction to actual robot position, while allowing filtering based on nearest pedestrian distance.
 if __name__ == "__main__":
     main()

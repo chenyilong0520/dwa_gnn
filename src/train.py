@@ -224,81 +224,34 @@ def load_filtered_sequence_numbers(json_path: str) -> List[int]:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument(
-        "--npz_dir", 
-        type=str, 
-        default="./data/data_processed", 
-        help="Directory containing gnn_dataset_*.npz files"
-    )
-    ap.add_argument(
-        "--augmented_npz_dir",
-        type=str,
-        default="./data/data_augmented",
-        help="Directory containing augmented gnn_dataset_*.npz files",
-    )
-    ap.add_argument(
-        "--include_augmented_train",
-        action="store_true",
-        default=True,
-        help="Append augmented NPZ files to the training split only.",
-    )
-    ap.add_argument(
-        "--no_include_augmented_train",
-        dest="include_augmented_train",
-        action="store_false",
-        help="Disable augmented NPZ files for the training split.",
-    )
-    ap.add_argument(
-        "--include_augmented_val",
-        action="store_true",
-        default=True,
-        help="Append augmented NPZ files for the held-out validation sequences.",
-    )
-    ap.add_argument(
-        "--no_include_augmented_val",
-        dest="include_augmented_val",
-        action="store_false",
-        help="Disable augmented NPZ files for the validation split.",
-    )
+    ap.add_argument("--npz_dir", type=str, default="./data/data_processed", help="Directory containing gnn_dataset_*.npz files")
+    ap.add_argument("--augmented_npz_dir",type=str,default="./data/data_augmented",help="Directory containing augmented gnn_dataset_*.npz files",)
+    ap.add_argument("--include_augmented_train",action="store_true",default=True,help="Append augmented NPZ files to the training split only.",)
+    ap.add_argument("--no_include_augmented_train",dest="include_augmented_train",action="store_false",help="Disable augmented NPZ files for the training split.",)
+    ap.add_argument("--include_augmented_val",action="store_true",default=True,help="Append augmented NPZ files for the held-out validation sequences.",)
+    ap.add_argument("--no_include_augmented_val",dest="include_augmented_val",action="store_false",help="Disable augmented NPZ files for the validation split.",)
+    
     ap.add_argument("--batch_size", type=int, default=128)
     ap.add_argument("--epochs", type=int, default=20)
     ap.add_argument("--lr", type=float, default=5e-4)
     ap.add_argument("--hidden_dim", type=int, default=64)
     ap.add_argument("--num_layers", type=int, default=3)
     ap.add_argument("--weight_decay", type=float, default=5e-4)
-    ap.add_argument(
-        "--consistency_loss",
-        action="store_true",
-        default=False,
-        help="Enable consistency regularization with Gaussian noise on pedestrian pos/vel.",
-    )
-    ap.add_argument(
-        "--symmetry_loss",
-        action="store_true",
-        default=False,
-        help="Enable y-flip equivariance regularization on mirrored inputs.",
-    )
+    
+    ap.add_argument("--consistency_loss",action="store_true",default=False,help="Enable consistency regularization with Gaussian noise on pedestrian pos/vel.",)
+    ap.add_argument("--symmetry_loss",action="store_true",default=False,help="Enable y-flip equivariance regularization on mirrored inputs.",)
     # lambda_sym=0.5
-    ap.add_argument("--lambda_cons", type=float, default=0.1, help="Weight for consistency loss.")
+    ap.add_argument("--lambda_cons", type=float, default=0.2, help="Weight for consistency loss.")
     ap.add_argument("--lambda_sym", type=float, default=0.5, help="Weight for symmetry loss.")
     ap.add_argument("--sigma_pos", type=float, default=0.02, help="Std of Gaussian noise added to pedestrian positions.")
     ap.add_argument("--sigma_vel", type=float, default=0.02, help="Std of Gaussian noise added to pedestrian velocities.")
-    ap.add_argument(
-        "--no_supervise_noisy",
-        dest="supervise_noisy",
-        action="store_false",
-        help="Disable supervised loss on the noisy view when consistency loss is enabled.",
-    )
+    
+    ap.add_argument("--no_supervise_noisy",dest="supervise_noisy",action="store_false",help="Disable supervised loss on the noisy view when consistency loss is enabled.",)
     ap.set_defaults(supervise_noisy=True)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--val_ratio", type=float, default=0.2, help="Fraction of sequences used for validation")
     ap.add_argument("--save_path", type=str, default="gnn_model.pt")
-    ap.add_argument(
-        "--filtered_files_json",
-        type=str,
-        default=None,
-        help="Optional JSON file listing sequence numbers to keep before the train/val split.",
-    )
+    ap.add_argument("--filtered_files_json",type=str,default="data/filtered_files.json",help="Optional JSON file listing sequence numbers to keep before the train/val split.",)
     args = ap.parse_args()
 
     set_seed(args.seed)

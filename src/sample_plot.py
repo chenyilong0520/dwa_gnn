@@ -251,8 +251,8 @@ def main() -> None:
     # ============================================================
     
     # test case 1: left-down
-    # pedestrian_positions = np.array([[-1.5, 0.0]], dtype=np.float32)
-    # pedestrian_velocities = np.array([[0.0, -2.0]], dtype=np.float32)
+    pedestrian_positions = np.array([[-0.5, 0.0]], dtype=np.float32)
+    pedestrian_velocities = np.array([[0.0, -2.0]], dtype=np.float32)
     # # test case 2: right-down
     # pedestrian_positions = np.array([[1.5, 0.0]], dtype=np.float32)
     # pedestrian_velocities = np.array([[0.0, -2.0]], dtype=np.float32)
@@ -347,6 +347,6 @@ def main() -> None:
         title=args.title,
     )
 
-
+# a standalone script that samples a robot trajectory from waypoints, simulates pedestrian positions and velocities, loads a pre-trained GNN model, predicts per-frame offsets for the robot, and visualizes the original and offset-adjusted trajectories along with pedestrians.
 if __name__ == "__main__":
     main()

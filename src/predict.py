@@ -211,6 +211,6 @@ def main():
     print("Predicted CV residual [dx, dy] (augmented global):", y_hat_aug.tolist())
     plot_prediction_scene(frame_nx5, y_hat)
     
-
+# an end-to-end script that takes a single frame of robot and pedestrian data, constructs the corresponding graph representation, loads a pre-trained GNN model, predicts the robot's offset using the model, and visualizes the scene with the predicted offset.
 if __name__ == "__main__":
     main()

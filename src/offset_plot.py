@@ -350,7 +350,7 @@ class OffsetPlotter:
         save_fig.savefig(self.save_path)
         rospy.loginfo("Saved offset plot figure to %s", self.save_path)
 
-
+# plot the offset trajectory using in real-time, while also saving the final figure and record file on shutdown
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sensor-topic", type=str, default="/motion_detector/visualization/lidar_pose")

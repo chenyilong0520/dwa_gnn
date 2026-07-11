@@ -373,6 +373,7 @@ class GnnSocialForcePlanner:
 
         return best_ttc
 
+# a social force planner node that subscribes to robot pose, velocity, pedestrian data, and a global path, computes a socially-aware path using a GNN model, and publishes the modified path and visualization markers. It also calculates various metrics like path length, irregularity, closest distance to pedestrians, and time-to-collision (TTC) for evaluation purposes.
 if __name__ == '__main__':
     try:
         planner = GnnSocialForcePlanner()

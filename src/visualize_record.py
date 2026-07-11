@@ -118,11 +118,11 @@ def draw_on_axis(
         filtered_states = track["filtered_states"]
         segments = build_segments(filtered_states)
 
-        for prev_x, prev_y, curr_x, curr_y, speed in segments:
-            dx = curr_x - prev_x
-            dy = curr_y - prev_y
-            scale = min(speed * 0.1, 1.0)
-            ax.arrow(prev_x, prev_y, dx * scale, dy * scale, head_width=0.1, head_length=0.2, fc=color, ec=color, alpha=0.6)
+        # for prev_x, prev_y, curr_x, curr_y, speed in segments:
+        #     dx = curr_x - prev_x
+        #     dy = curr_y - prev_y
+        #     scale = min(speed * 0.1, 1.0)
+        #     ax.arrow(prev_x, prev_y, dx * scale, dy * scale, head_width=0.1, head_length=0.2, fc=color, ec=color, alpha=0.6)
 
         if filtered_states:
             state_array = np.array([(x, y) for x, y, _, _, _ in filtered_states], dtype=np.float32)
@@ -194,6 +194,6 @@ def main() -> None:
     else:
         plt.show()
 
-
+# a standalone script that visualizes recorded sensor, predicted offset, and pedestrian trajectories from a JSON record file, allowing frame slicing and saving the resulting plot to a file.
 if __name__ == "__main__":
     main()

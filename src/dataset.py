@@ -263,23 +263,13 @@ if __name__ == "__main__":
     ap.add_argument("--augmented_out_dir", type=str, default="data/data_augmented")
     ap.add_argument("--xml_name", type=str, default="output4.xml")
     ap.add_argument("--frame_rate", type=float, default=60.0)
-    ap.add_argument("--k_horizon_frames", type=int, default=60)
-    ap.add_argument("--d_thresh", type=float, default=2.5)
+    ap.add_argument("--k_horizon_frames", type=int, default=15) # 60
+    ap.add_argument("--d_thresh", type=float, default=2.5) # 2.5 
     ap.add_argument("--node_inclusion_radius", type=float, default=4.0)
     ap.add_argument("--strict_less", action="store_true", default=True)
     ap.add_argument("--non_strict_less", dest="strict_less", action="store_false")
-    ap.add_argument(
-        "--write_augmented",
-        action="store_true",
-        default=True,
-        help="Also write y-axis mirrored datasets into augmented_out_dir.",
-    )
-    ap.add_argument(
-        "--no_write_augmented",
-        dest="write_augmented",
-        action="store_false",
-        help="Disable writing mirrored datasets.",
-    )
+    ap.add_argument("--write_augmented", action="store_true", default=True, help="Also write y-axis mirrored datasets into augmented_out_dir.",)
+    ap.add_argument("--no_write_augmented",dest="write_augmented",action="store_false",help="Disable writing mirrored datasets.",)
     args = ap.parse_args()
 
     def natural_key(s: str):

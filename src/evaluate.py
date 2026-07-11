@@ -264,6 +264,6 @@ def main() -> None:
 
     print(f"Evaluation complete. Results written to '{args.output_path}'.")
 
-
+# a standalone script that evaluates a recorded trajectory from a JSON file, computing metrics such as path length, irregularity, closest pedestrian distance, and minimum time-to-collision for both the original and offset-adjusted paths, and writes the results to a text report.
 if __name__ == "__main__":
     main()

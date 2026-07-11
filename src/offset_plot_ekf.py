@@ -117,6 +117,7 @@ class OffsetPlotter:
         max_time_gap: float,
         max_distance_gap: float,
         min_sensor_distance: float,
+        max_sensor_distance: float,
         min_track_states: int,
         min_prediction_speed: float,
         write_record: bool,
@@ -132,6 +133,7 @@ class OffsetPlotter:
         self.max_time_gap = max_time_gap
         self.max_distance_gap = max_distance_gap
         self.min_sensor_distance = min_sensor_distance
+        self.max_sensor_distance = max_sensor_distance
         self.min_track_states = min_track_states
         self.min_prediction_speed = min_prediction_speed
         self.write_record = write_record
@@ -272,7 +274,7 @@ class OffsetPlotter:
             if sensor_pos is not None:
                 ped_pos = np.array(latest_state[:2], dtype=np.float32)
                 distance_to_sensor = np.linalg.norm(ped_pos - sensor_pos)
-                if distance_to_sensor < self.min_sensor_distance:
+                if distance_to_sensor < self.min_sensor_distance or distance_to_sensor > self.max_sensor_distance:
                     continue
 
             valid_tracks[track_id] = {
@@ -450,6 +452,9 @@ class OffsetPlotter:
             for prev_x, prev_y, curr_x, curr_y, speed in segments_slice:
                 dx = curr_x - prev_x
                 dy = curr_y - prev_y
+                distance = np.hypot(dx, dy)
+                if distance > self.max_distance_gap:
+                    continue
                 scale = min(speed * 0.1, 1.0)
                 ax.arrow(prev_x, prev_y, dx * scale, dy * scale, head_width=0.1, head_length=0.2, fc=color, ec=color, alpha=0.6)
 
@@ -588,19 +593,20 @@ class OffsetPlotter:
         if plt.fignum_exists(self.fig.number):
             plt.close(self.fig)
 
-
+# plot the offset trajectory using EKF in real-time, while also saving the final figure and record file on shutdown
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sensor-topic", type=str, default="/motion_detector/visualization/lidar_pose")
     ap.add_argument("--ped-topic", type=str, default="/motion_detector/visualization/detections/centroid/dynamic")
-    ap.add_argument("--model-path", type=str, default="gnn_model.pt")
+    ap.add_argument("--model-path", type=str, default="gnn_model_best.pt")
     ap.add_argument("--save-path", type=str, default="offset_plot_ekf.png")
     ap.add_argument("--title", type=str, default="Offset Sensor Trajectory")
     ap.add_argument("--max-pedestrians", type=int, default=30)
     ap.add_argument("--refresh-hz", type=float, default=10.0, help="Plot refresh rate.")
     ap.add_argument("--max-time-gap", type=float, default=0.2, help="Max time gap (seconds) to consider same object.")
     ap.add_argument("--max-distance-gap", type=float, default=0.5, help="Max distance gap (meters) to consider same object.")
-    ap.add_argument("--min-sensor-distance", type=float, default=0.2, help="Minimum distance from sensor to consider pedestrian valid (filter false positives).")
+    ap.add_argument("--min-sensor-distance", type=float, default=0.45, help="Minimum distance from sensor to consider pedestrian valid (filter false positives).")
+    ap.add_argument("--max-sensor-distance", type=float, default=2.5, help="Maximum distance from sensor to consider pedestrian valid (filter false positives).")
     ap.add_argument("--min-track-states", type=int, default=2, help="Minimum number of filtered states required before a pedestrian track is considered valid.")
     ap.add_argument("--min-prediction-speed", type=float, default=0.5, help="Suppress predicted offset when robot linear speed is below this threshold.")
     ap.add_argument("--write-record", action="store_true", default=True, help="Write per-frame filtered robot/pedestrian snapshots to a JSON record file.")
@@ -620,6 +626,7 @@ def main() -> None:
         max_time_gap=args.max_time_gap,
         max_distance_gap=args.max_distance_gap,
         min_sensor_distance=args.min_sensor_distance,
+        max_sensor_distance=args.max_sensor_distance,
         min_track_states=args.min_track_states,
         min_prediction_speed=args.min_prediction_speed,
         write_record=args.write_record,
