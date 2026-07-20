@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import time
 from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -29,80 +31,65 @@ from utils import (
     build_bidirectional_star,
     load_model,
     preprocess_frame_to_node_features,
+    ConstantVelocityEKF,
 )
 
 Point3 = Tuple[float, float, float]  # (x, y, timestamp)
 TrackedState = Tuple[float, float, float, float, float]  # (x, y, vx, vy, timestamp)
+NODE_FEATURE_NAMES = ["x_rel", "y_rel", "vx_rel", "vy_rel", "is_robot"]
+LABEL_NAMES = ["dx", "dy"]
 
 
-class ConstantVelocityEKF:
-    def __init__(
-        self,
-        process_noise_position: float = 0.5,
-        process_noise_velocity: float = 1.0,
-        measurement_noise: float = 0.15,
-        initial_covariance: float = 10.0,
-    ) -> None:
-        self.process_noise_position = process_noise_position
-        self.process_noise_velocity = process_noise_velocity
-        self.measurement_noise = measurement_noise
-        self.initial_covariance = initial_covariance
-        self.state: Optional[np.ndarray] = None
-        self.covariance: Optional[np.ndarray] = None
+def load_normalization_stats(json_path: str) -> Tuple[Dict[str, Dict[str, float]], Dict[str, Dict[str, float]]]:
+    with open(json_path, "r", encoding="utf-8") as f:
+        payload = json.load(f)
 
-    def initialize(self, x: float, y: float) -> None:
-        self.state = np.array([x, y, 0.0, 0.0], dtype=np.float64)
-        self.covariance = np.eye(4, dtype=np.float64) * self.initial_covariance
-
-    def predict(self, dt: float) -> None:
-        if self.state is None or self.covariance is None or dt <= 0.0:
-            return
-
-        F = np.array(
-            [
-                [1.0, 0.0, dt, 0.0],
-                [0.0, 1.0, 0.0, dt],
-                [0.0, 0.0, 1.0, 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-            ],
-            dtype=np.float64,
+    node_stats = payload.get("data_processed")
+    label_stats = payload.get("label_processed")
+    if not isinstance(node_stats, dict) or not isinstance(label_stats, dict):
+        raise ValueError(
+            f"Expected 'data_processed' and 'label_processed' entries in normalization stats file: {json_path}"
         )
+    return node_stats, label_stats
 
-        dt2 = dt * dt
-        q_pos = self.process_noise_position
-        q_vel = self.process_noise_velocity
-        Q = np.array(
-            [
-                [0.25 * dt2 * dt2 * q_pos, 0.0, 0.5 * dt2 * dt * q_pos, 0.0],
-                [0.0, 0.25 * dt2 * dt2 * q_pos, 0.0, 0.5 * dt2 * dt * q_pos],
-                [0.5 * dt2 * dt * q_pos, 0.0, dt2 * q_vel, 0.0],
-                [0.0, 0.5 * dt2 * dt * q_pos, 0.0, dt2 * q_vel],
-            ],
-            dtype=np.float64,
-        )
 
-        self.state = F @ self.state
-        self.covariance = F @ self.covariance @ F.T + Q
+def normalize_node_features_for_inference(
+    x: np.ndarray,
+    stats: Dict[str, Dict[str, float]],
+) -> np.ndarray:
+    x_norm = np.asarray(x, dtype=np.float32).copy()
+    for idx, feature_name in enumerate(NODE_FEATURE_NAMES):
+        if feature_name == "is_robot":
+            continue
 
-    def update(self, measurement: np.ndarray) -> np.ndarray:
-        if self.state is None or self.covariance is None:
-            raise RuntimeError("EKF must be initialized before update().")
+        feature_stats = stats.get(feature_name)
+        if feature_stats is None:
+            raise KeyError(f"Missing node stats for '{feature_name}'")
 
-        H = np.array([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]], dtype=np.float64)
-        R = np.eye(2, dtype=np.float64) * self.measurement_noise
-        innovation = measurement - self.measurement_function(self.state)
-        S = H @ self.covariance @ H.T + R
-        K = self.covariance @ H.T @ np.linalg.inv(S)
+        scale = max(abs(float(feature_stats["min"])), abs(float(feature_stats["max"])))
+        if scale < 1e-12:
+            x_norm[:, idx] = 0.0
+            continue
+        x_norm[:, idx] = x_norm[:, idx] / scale
+    return x_norm
 
-        self.state = self.state + K @ innovation
-        identity = np.eye(4, dtype=np.float64)
-        self.covariance = (identity - K @ H) @ self.covariance
-        return self.state.copy()
 
-    @staticmethod
-    def measurement_function(state: np.ndarray) -> np.ndarray:
-        return state[:2]
+def denormalize_label_prediction(
+    y: np.ndarray,
+    stats: Dict[str, Dict[str, float]],
+) -> np.ndarray:
+    y_denorm = np.asarray(y, dtype=np.float32).copy()
+    for idx, label_name in enumerate(LABEL_NAMES):
+        label_stats = stats.get(label_name)
+        if label_stats is None:
+            raise KeyError(f"Missing label stats for '{label_name}'")
 
+        scale = max(abs(float(label_stats["min"])), abs(float(label_stats["max"])))
+        if scale < 1e-12:
+            y_denorm[idx] = 0.0
+            continue
+        y_denorm[idx] = y_denorm[idx] * scale
+    return y_denorm
 
 class OffsetPlotter:
     def __init__(
@@ -116,13 +103,18 @@ class OffsetPlotter:
         refresh_hz: float,
         max_time_gap: float,
         max_distance_gap: float,
+        sensor_noise_thresh: float,
         min_sensor_distance: float,
         max_sensor_distance: float,
         min_track_states: int,
         min_prediction_speed: float,
+        visualize: bool,
         write_record: bool,
         record_path: str,
+        stats_path: str,
         show_frame: Optional[int],
+        idle_timeout: float,
+        shutdown_grace_seconds: float,
     ):
         self.sensor_topic = sensor_topic
         self.ped_topic = ped_topic
@@ -132,13 +124,18 @@ class OffsetPlotter:
         self.refresh_hz = refresh_hz
         self.max_time_gap = max_time_gap
         self.max_distance_gap = max_distance_gap
+        self.sensor_noise_thresh = sensor_noise_thresh
         self.min_sensor_distance = min_sensor_distance
         self.max_sensor_distance = max_sensor_distance
         self.min_track_states = min_track_states
         self.min_prediction_speed = min_prediction_speed
+        self.visualize = visualize
         self.write_record = write_record
         self.record_path = record_path
+        self.stats_path = stats_path
         self.show_frame = show_frame
+        self.idle_timeout = idle_timeout
+        self.shutdown_grace_seconds = shutdown_grace_seconds
         self.data_lock = Lock()
 
         self.sensor_positions: List[Point3] = []
@@ -151,17 +148,28 @@ class OffsetPlotter:
         self.record_frames: List[Dict[str, Any]] = []
         self.record_frame_index = 0
         self.results_saved = False
+        self.pending_redraw = False
+        self.last_sensor_msg_wall_time: Optional[float] = None
+        self.first_sensor_msg_wall_time: Optional[float] = None
+        self.active_sensor_callback_count = 0
+        self.finalizing = False
+        self.save_completed_wall_time: Optional[float] = None
+        self.idle_wait_logged = False
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = load_model(model_path).to(self.device)
         self.model.eval()
+        self.node_feature_stats, self.label_stats = load_normalization_stats(self.stats_path)
 
-        self.fig, self.ax = plt.subplots(figsize=(10, 10))
-        plt.ion()
-        self.fig.show()
+        self.fig = None
+        self.ax = None
         self.window_closed = False
-        self.fig.canvas.mpl_connect("close_event", self.on_close)
-        self.fig.canvas.mpl_connect("key_press_event", self.on_key_press)
+        if self.visualize:
+            self.fig, self.ax = plt.subplots(figsize=(10, 10))
+            plt.ion()
+            self.fig.show()
+            self.fig.canvas.mpl_connect("close_event", self.on_close)
+            self.fig.canvas.mpl_connect("key_press_event", self.on_key_press)
 
         rospy.Subscriber(self.sensor_topic, Marker, self.sensor_callback, queue_size=200)
         rospy.Subscriber(self.ped_topic, MarkerArray, self.pedestrian_callback, queue_size=500)
@@ -169,91 +177,154 @@ class OffsetPlotter:
     def sensor_callback(self, msg: Marker) -> None:
         if msg.action != Marker.ADD:
             return
+        sensor_state: Optional[TrackedState] = None
+        valid_tracks_snapshot: Dict[str, Dict[str, Any]] = {}
         with self.data_lock:
-            timestamp = msg.header.stamp.to_sec()
-            curr_x = msg.pose.position.x
-            curr_y = msg.pose.position.y
+            if self.finalizing:
+                return
+            now_wall = time.monotonic()
+            self.active_sensor_callback_count += 1
+            self.last_sensor_msg_wall_time = now_wall
+            if self.first_sensor_msg_wall_time is None:
+                self.first_sensor_msg_wall_time = now_wall
+            self.idle_wait_logged = False
 
-            if self.sensor_positions:
-                prev_x, prev_y, prev_t = self.sensor_positions[-1]
-                dt = timestamp - prev_t
-                distance = np.hypot(curr_x - prev_x, curr_y - prev_y)
-                if dt <= 0.0 or dt > self.max_time_gap or distance > self.max_distance_gap:
-                    self.sensor_positions.clear()
-                    self.sensor_filtered_states.clear()
-                    self.offset_positions.clear()
-                    self.last_sensor_index = 0
-                    self.sensor_ekf = ConstantVelocityEKF()
+        try:
+            with self.data_lock:
+                timestamp = msg.header.stamp.to_sec()
+                curr_x = msg.pose.position.x
+                curr_y = msg.pose.position.y
+
+                if self.sensor_positions:
+                    prev_x, prev_y, prev_t = self.sensor_positions[-1]
+                    dt = timestamp - prev_t
+                    distance = np.hypot(curr_x - prev_x, curr_y - prev_y)
+                    if dt <= 0.0 or dt > self.max_time_gap or distance > self.max_distance_gap:
+                        self.sensor_positions.clear()
+                        self.sensor_filtered_states.clear()
+                        self.offset_positions.clear()
+                        self.last_sensor_index = 0
+                        self.sensor_ekf = ConstantVelocityEKF()
+                    else:
+                        self.sensor_ekf.predict(dt)
                 else:
-                    self.sensor_ekf.predict(dt)
-            else:
-                self.sensor_ekf.initialize(curr_x, curr_y)
+                    self.sensor_ekf.initialize(curr_x, curr_y)
 
-            self.sensor_positions.append((curr_x, curr_y, timestamp))
-            if self.sensor_ekf.state is None:
-                self.sensor_ekf.initialize(curr_x, curr_y)
-            updated_state = self.sensor_ekf.update(np.array([curr_x, curr_y], dtype=np.float64))
-            self.sensor_filtered_states.append(
-                (
+                self.sensor_positions.append((curr_x, curr_y, timestamp))
+                if self.sensor_ekf.state is None:
+                    self.sensor_ekf.initialize(curr_x, curr_y)
+                updated_state = self.sensor_ekf.update(np.array([curr_x, curr_y], dtype=np.float64))
+                sensor_state = (
                     float(updated_state[0]),
                     float(updated_state[1]),
                     float(updated_state[2]),
                     float(updated_state[3]),
                     timestamp,
                 )
-            )
+                self.sensor_filtered_states.append(sensor_state)
+                sensor_pos = np.array(sensor_state[:2], dtype=np.float32)
+                valid_tracks_snapshot = self.get_valid_pedestrian_tracks(timestamp, sensor_pos)
 
-    def pedestrian_callback(self, msg: MarkerArray) -> None:
-        for marker in msg.markers:
-            if marker.action != Marker.ADD:
-                continue
-            track_id = str(marker.id)
-            timestamp = marker.header.stamp.to_sec()
-            curr_x, curr_y = marker.pose.position.x, marker.pose.position.y
-            color = (marker.color.r, marker.color.g, marker.color.b, marker.color.a)
+            if sensor_state is None:
+                return
+
+            predicted_offset = self.predict_offset_for_sensor_state(sensor_state, valid_tracks_snapshot)
+            pedestrian_snapshot = self.serialize_pedestrian_snapshot(valid_tracks_snapshot)
 
             with self.data_lock:
-                track = self.pedestrian_tracks.setdefault(
-                    track_id,
-                    {
-                        "positions": [],
-                        "filtered_states": [],
-                        "color": color,
-                        "ekf": ConstantVelocityEKF(),
-                    },
-                )
-                track["color"] = color
-                positions = track["positions"]
-                filtered_states = track["filtered_states"]
-                ekf: ConstantVelocityEKF = track["ekf"]
+                if self.finalizing:
+                    return
+                self.last_predicted_offset = predicted_offset
+                new_offset = (sensor_state[0] + predicted_offset[0], sensor_state[1] + predicted_offset[1])
+                self.offset_positions.append(new_offset)
+                self.last_sensor_index = len(self.sensor_filtered_states)
+                if self.write_record:
+                    self.append_record_frame(sensor_state, new_offset, pedestrian_snapshot)
+                if self.visualize:
+                    self.pending_redraw = True
+        finally:
+            with self.data_lock:
+                self.active_sensor_callback_count -= 1
 
-                if positions:
-                    prev_x, prev_y, prev_t = positions[-1]
-                    dt = timestamp - prev_t
-                    distance = np.hypot(curr_x - prev_x, curr_y - prev_y)
-                    if dt <= 0.0 or dt > self.max_time_gap or distance > self.max_distance_gap:
-                        positions.clear()
-                        filtered_states.clear()
-                        ekf = ConstantVelocityEKF()
-                        track["ekf"] = ekf
-                    else:
-                        ekf.predict(dt)
-                else:
-                    ekf.initialize(curr_x, curr_y)
+    def pedestrian_callback(self, msg: MarkerArray) -> None:
+        with self.data_lock:
+            if self.finalizing:
+                return
 
-                positions.append((curr_x, curr_y, timestamp))
-                if ekf.state is None:
-                    ekf.initialize(curr_x, curr_y)
-                updated_state = ekf.update(np.array([curr_x, curr_y], dtype=np.float64))
-                filtered_states.append(
-                    (
-                        float(updated_state[0]),
-                        float(updated_state[1]),
-                        float(updated_state[2]),
-                        float(updated_state[3]),
-                        timestamp,
+        latest_msg_timestamp: Optional[float] = None
+        try:
+            for marker in msg.markers:
+                if marker.action != Marker.ADD:
+                    continue
+                track_id = str(marker.id)
+                timestamp = marker.header.stamp.to_sec()
+                if latest_msg_timestamp is None or timestamp > latest_msg_timestamp:
+                    latest_msg_timestamp = timestamp
+                curr_x, curr_y = marker.pose.position.x, marker.pose.position.y
+                color = (marker.color.r, marker.color.g, marker.color.b, marker.color.a)
+
+                with self.data_lock:
+                    track = self.pedestrian_tracks.setdefault(
+                        track_id,
+                        {
+                            "positions": [],
+                            "filtered_states": [],
+                            "color": color,
+                            "ekf": ConstantVelocityEKF(),
+                        },
                     )
-                )
+                    track["color"] = color
+                    positions = track["positions"]
+                    filtered_states = track["filtered_states"]
+                    ekf: ConstantVelocityEKF = track["ekf"]
+
+                    if positions:
+                        prev_x, prev_y, prev_t = positions[-1]
+                        dt = timestamp - prev_t
+                        distance = np.hypot(curr_x - prev_x, curr_y - prev_y)
+                        if dt <= 0.0 or dt > self.max_time_gap or distance > self.max_distance_gap:
+                            positions.clear()
+                            filtered_states.clear()
+                            ekf = ConstantVelocityEKF()
+                            track["ekf"] = ekf
+                        else:
+                            ekf.predict(dt)
+                    else:
+                        ekf.initialize(curr_x, curr_y)
+
+                    positions.append((curr_x, curr_y, timestamp))
+                    if ekf.state is None:
+                        ekf.initialize(curr_x, curr_y)
+                    updated_state = ekf.update(np.array([curr_x, curr_y], dtype=np.float64))
+                    filtered_states.append(
+                        (
+                            float(updated_state[0]),
+                            float(updated_state[1]),
+                            float(updated_state[2]),
+                            float(updated_state[3]),
+                            timestamp,
+                        )
+                    )
+
+            if latest_msg_timestamp is None:
+                return
+
+            with self.data_lock:
+                stale_track_ids = []
+                for track_id, track in self.pedestrian_tracks.items():
+                    filtered_states = track["filtered_states"]
+                    if not filtered_states:
+                        stale_track_ids.append(track_id)
+                        continue
+
+                    last_state_timestamp = filtered_states[-1][4]
+                    if latest_msg_timestamp - last_state_timestamp > self.max_time_gap:
+                        stale_track_ids.append(track_id)
+
+                for track_id in stale_track_ids:
+                    del self.pedestrian_tracks[track_id]
+        finally:
+            pass
 
     def on_close(self, _event) -> None:
         self.window_closed = True
@@ -261,33 +332,67 @@ class OffsetPlotter:
     def on_key_press(self, event) -> None:
         if event.key in {"q", "escape"}:
             self.window_closed = True
-            plt.close(self.fig)
+            if self.fig is not None:
+                plt.close(self.fig)
 
-    def get_valid_pedestrian_tracks(self, sensor_pos: Optional[np.ndarray]) -> Dict[str, Dict[str, Any]]:
-        valid_tracks: Dict[str, Dict[str, Any]] = {}
+    def get_valid_pedestrian_tracks(
+        self,
+        reference_timestamp: Optional[float],
+        sensor_pos: Optional[np.ndarray],
+    ) -> Dict[str, Dict[str, Any]]:
+        valid_tracks_with_distance: List[Tuple[str, Dict[str, Any], Optional[float]]] = []
         for track_id, track in self.pedestrian_tracks.items():
             filtered_states = track["filtered_states"]
             if len(filtered_states) < self.min_track_states:
                 continue
 
             latest_state = filtered_states[-1]
+            if reference_timestamp is not None and reference_timestamp - latest_state[4] > self.max_time_gap:
+                continue
+
+            distance_to_sensor: Optional[float] = None
             if sensor_pos is not None:
                 ped_pos = np.array(latest_state[:2], dtype=np.float32)
-                distance_to_sensor = np.linalg.norm(ped_pos - sensor_pos)
-                if distance_to_sensor < self.min_sensor_distance or distance_to_sensor > self.max_sensor_distance:
-                    continue
+                distance_to_sensor = float(np.linalg.norm(ped_pos - sensor_pos))
 
-            valid_tracks[track_id] = {
-                "color": track["color"],
-                "filtered_states": list(filtered_states),
-                "latest_state": latest_state,
-            }
-        return valid_tracks
+            valid_tracks_with_distance.append(
+                (
+                    track_id,
+                    {
+                        "color": track["color"],
+                        "filtered_states": list(filtered_states),
+                        "latest_state": latest_state,
+                    },
+                    distance_to_sensor,
+                )
+            )
 
-    def snapshot_latest_pedestrians(self, sensor_x: float, sensor_y: float) -> List[Dict[str, Any]]:
+        if sensor_pos is not None:
+            sorted_tracks = sorted(valid_tracks_with_distance, key=lambda item: item[2] if item[2] is not None else float("inf"))
+            denoised_tracks = [item for item in sorted_tracks if item[2] is not None and item[2] >= self.sensor_noise_thresh]
+            if not denoised_tracks:
+                return {}
+
+            closest_distance = denoised_tracks[0][2]
+            if closest_distance is None or closest_distance > self.min_sensor_distance:
+                return {}
+
+            bounded_tracks = [
+                (track_id, track)
+                for track_id, track, distance in denoised_tracks
+                if distance is not None and distance <= self.max_sensor_distance
+            ]
+            return dict(bounded_tracks[: self.max_pedestrians])
+
+        sorted_tracks = sorted(
+            valid_tracks_with_distance,
+            key=lambda item: len(item[1]["filtered_states"]),
+            reverse=True,
+        )
+        return dict((track_id, track) for track_id, track, _ in sorted_tracks[: self.max_pedestrians])
+
+    def serialize_pedestrian_snapshot(self, valid_tracks: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
         pedestrians: List[Dict[str, Any]] = []
-        current_sensor_pos = np.array([sensor_x, sensor_y], dtype=np.float32)
-        valid_tracks = self.get_valid_pedestrian_tracks(current_sensor_pos)
 
         for track_id, track in valid_tracks.items():
             latest_state = track["latest_state"]
@@ -308,7 +413,12 @@ class OffsetPlotter:
         pedestrians.sort(key=lambda item: item["track_id"])
         return pedestrians
 
-    def append_record_frame(self, sensor_state: TrackedState, offset_position: Tuple[float, float]) -> None:
+    def append_record_frame(
+        self,
+        sensor_state: TrackedState,
+        offset_position: Tuple[float, float],
+        pedestrian_snapshot: List[Dict[str, Any]],
+    ) -> None:
         sensor_x, sensor_y, sensor_vx, sensor_vy, timestamp = sensor_state
         self.record_frames.append(
             {
@@ -321,7 +431,7 @@ class OffsetPlotter:
                     float(sensor_vy),
                 ],
                 "offset_position": [float(offset_position[0]), float(offset_position[1])],
-                "pedestrian_tracks": self.snapshot_latest_pedestrians(sensor_x, sensor_y),
+                "pedestrian_tracks": pedestrian_snapshot,
             }
         )
         self.record_frame_index += 1
@@ -329,11 +439,13 @@ class OffsetPlotter:
     def compute_tracking_data(self) -> Dict[str, Dict[str, Any]]:
         with self.data_lock:
             current_sensor_pos = None
+            current_timestamp = None
             if self.sensor_filtered_states:
                 current_sensor_pos = np.array(self.sensor_filtered_states[-1][:2], dtype=np.float32)
+                current_timestamp = self.sensor_filtered_states[-1][4]
 
             ped_tracks: Dict[str, Dict[str, Any]] = {}
-            valid_tracks = self.get_valid_pedestrian_tracks(current_sensor_pos)
+            valid_tracks = self.get_valid_pedestrian_tracks(current_timestamp, current_sensor_pos)
             for track_id, track in valid_tracks.items():
                 color = track["color"]
                 filtered_states = track["filtered_states"]
@@ -351,33 +463,36 @@ class OffsetPlotter:
                         "filtered_states": list(filtered_states),
                         "latest_state": filtered_states[-1],
                     }
+        return ped_tracks
 
-            sorted_peds = sorted(ped_tracks.items(), key=lambda x: len(x[1]["segments"]), reverse=True)
-            top_peds = dict(sorted_peds[: self.max_pedestrians])
+    def build_live_graph_from_snapshot(
+        self,
+        sensor_state: TrackedState,
+        valid_tracks: Dict[str, Dict[str, Any]],
+    ) -> np.ndarray:
+        curr_x, curr_y, curr_vx, curr_vy, _ = sensor_state
+        frame_nodes: List[List[float]] = []
+        frame_nodes.append([curr_x, curr_y, curr_vx, curr_vy, 1.0])
 
-        return top_peds
+        for track in valid_tracks.values():
+            curr_px, curr_py, ped_vx, ped_vy, _ = track["latest_state"]
+            frame_nodes.append([curr_px, curr_py, ped_vx, ped_vy, 0.0])
 
-    def build_live_graph(self) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
-        with self.data_lock:
-            if len(self.sensor_filtered_states) < 2:
-                return None
-            curr_x, curr_y, curr_vx, curr_vy, _ = self.sensor_filtered_states[-1]
-            robot_vel = np.array([curr_vx, curr_vy], dtype=np.float32)
+        return np.asarray(frame_nodes, dtype=np.float32)
 
-            frame_nodes: List[List[float]] = []
-            frame_nodes.append([curr_x, curr_y, robot_vel[0], robot_vel[1], 1.0])
+    def predict_offset_for_sensor_state(
+        self,
+        sensor_state: TrackedState,
+        valid_tracks: Dict[str, Dict[str, Any]],
+    ) -> np.ndarray:
+        if len(self.sensor_filtered_states) < 2 or len(valid_tracks) < 1:
+            return np.zeros(2, dtype=np.float32)
 
-            current_sensor_pos = np.array([curr_x, curr_y], dtype=np.float32)
-            valid_tracks = self.get_valid_pedestrian_tracks(current_sensor_pos)
-            for track in valid_tracks.values():
-                curr_px, curr_py, curr_vx, curr_vy, _ = track["latest_state"]
-                frame_nodes.append([curr_px, curr_py, curr_vx, curr_vy, 0.0])
-
-            frame_array = np.asarray(frame_nodes, dtype=np.float32)
-            x_node = preprocess_frame_to_node_features(frame_array)
-            #edge_index, edge_attr = build_directional_star(x_node)
-            edge_index, edge_attr = build_bidirectional_star(x_node)
-            return frame_array, x_node, edge_index, edge_attr
+        frame_array = self.build_live_graph_from_snapshot(sensor_state, valid_tracks)
+        x_node = preprocess_frame_to_node_features(frame_array)
+        x_node = normalize_node_features_for_inference(x_node, self.node_feature_stats)
+        edge_index, edge_attr = build_bidirectional_star(x_node)
+        return self.predict_offset(x_node, frame_array, edge_index, edge_attr)
 
     def predict_offset(self, x_node: np.ndarray, frame_array: np.ndarray, edge_index: np.ndarray, edge_attr: np.ndarray) -> np.ndarray:
         data = Data(
@@ -387,6 +502,7 @@ class OffsetPlotter:
         )
         with torch.no_grad():
             y_hat_local = self.model(data.to(self.device)).cpu().numpy().reshape(-1)
+        y_hat_local = denormalize_label_prediction(y_hat_local, self.label_stats)
         
         # Transform local offset to global
         robot_vx, robot_vy = frame_array[0, 2], frame_array[0, 3]
@@ -449,14 +565,14 @@ class OffsetPlotter:
             segments_slice = segments[-self.show_frame:] if self.show_frame else segments
             states_slice = filtered_states[-self.show_frame:] if self.show_frame else filtered_states
 
-            for prev_x, prev_y, curr_x, curr_y, speed in segments_slice:
-                dx = curr_x - prev_x
-                dy = curr_y - prev_y
-                distance = np.hypot(dx, dy)
-                if distance > self.max_distance_gap:
-                    continue
-                scale = min(speed * 0.1, 1.0)
-                ax.arrow(prev_x, prev_y, dx * scale, dy * scale, head_width=0.1, head_length=0.2, fc=color, ec=color, alpha=0.6)
+            # for prev_x, prev_y, curr_x, curr_y, speed in segments_slice:
+            #     dx = curr_x - prev_x
+            #     dy = curr_y - prev_y
+            #     distance = np.hypot(dx, dy)
+            #     if distance > self.max_distance_gap:
+            #         continue
+            #     scale = min(speed * 0.1, 1.0)
+            #     ax.arrow(prev_x, prev_y, dx * scale, dy * scale, head_width=0.1, head_length=0.2, fc=color, ec=color, alpha=0.6)
 
             if states_slice:
                 state_array = np.array([(x, y) for x, y, _, _, _ in states_slice], dtype=np.float32)
@@ -501,6 +617,8 @@ class OffsetPlotter:
         ax.legend(loc="upper right")
 
     def redraw(self) -> None:
+        if not self.visualize or self.fig is None or self.ax is None:
+            return
         if self.window_closed or not plt.fignum_exists(self.fig.number):
             self.window_closed = True
             return
@@ -508,30 +626,6 @@ class OffsetPlotter:
         ped_tracks = self.compute_tracking_data()
         with self.data_lock:
             sensor_positions = [(x, y, t) for x, y, _, _, t in self.sensor_filtered_states]
-
-        if len(sensor_positions) >= 2:
-            graph_data = self.build_live_graph()
-            if graph_data is not None:
-                frame_array, x_node, edge_index, edge_attr = graph_data
-                predicted_offset = self.predict_offset(x_node, frame_array, edge_index, edge_attr)
-            else:
-                predicted_offset = np.array([0.0, 0.0])
-        else:
-            predicted_offset = np.array([0.0, 0.0])
-
-        self.last_predicted_offset = predicted_offset
-
-        if len(sensor_positions) != self.last_sensor_index:
-            # Append an offset entry for every new sensor frame since last update.
-            with self.data_lock:
-                for i in range(self.last_sensor_index, len(self.sensor_filtered_states)):
-                    sensor_state = self.sensor_filtered_states[i]
-                    x, y, _, _, _ = sensor_state
-                    new_offset = (x + predicted_offset[0], y + predicted_offset[1])
-                    self.offset_positions.append(new_offset)
-                    if self.write_record:
-                        self.append_record_frame(sensor_state, new_offset)
-                self.last_sensor_index = len(self.sensor_filtered_states)
 
         # Snapshot offsets after the update so drawing sees the latest copy.
         with self.data_lock:
@@ -567,9 +661,11 @@ class OffsetPlotter:
             record_payload = {
                 "frames": list(self.record_frames),
             }
+            frame_count = len(self.record_frames)
         with open(self.record_path, "w", encoding="ascii") as f:
             json.dump(record_payload, f, indent=2)
         rospy.loginfo("Saved record file to %s", self.record_path)
+        print(f"Final total frames saved: {frame_count}")
 
     def save_results_once(self) -> None:
         if self.results_saved:
@@ -587,31 +683,52 @@ class OffsetPlotter:
         except Exception as exc:
             rospy.logwarn("Failed to save record file: %s", exc)
 
-    def shutdown(self) -> None:
+    def log_autostop_state(self, reason: str) -> None:
+        with self.data_lock:
+            rospy.loginfo(
+                "%s auto-stop state: first_sensor_msg_wall_time=%s, last_sensor_msg_wall_time=%s, "
+                "active_sensor_callback_count=%d, finalizing=%s, save_completed_wall_time=%s, "
+                "results_saved=%s, record_frame_count=%d",
+                reason,
+                self.first_sensor_msg_wall_time,
+                self.last_sensor_msg_wall_time,
+                self.active_sensor_callback_count,
+                self.finalizing,
+                self.save_completed_wall_time,
+                self.results_saved,
+                len(self.record_frames),
+            )
+
+    def close_figure(self) -> None:
         self.window_closed = True
-        self.save_results_once()
-        if plt.fignum_exists(self.fig.number):
+        if self.fig is not None and plt.fignum_exists(self.fig.number):
             plt.close(self.fig)
 
-# plot the offset trajectory using EKF in real-time, while also saving the final figure and record file on shutdown
+
+# plot the offset trajectory using EKF in real-time, then auto-save and stop after both topics go idle
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sensor-topic", type=str, default="/motion_detector/visualization/lidar_pose")
     ap.add_argument("--ped-topic", type=str, default="/motion_detector/visualization/detections/centroid/dynamic")
-    ap.add_argument("--model-path", type=str, default="gnn_model_best.pt")
+    ap.add_argument("--model-path", type=str, default="gnn_model.pt")
+    ap.add_argument("--stats-path", type=str, default=os.path.join("data", "node_feature_stats.json"))
     ap.add_argument("--save-path", type=str, default="offset_plot_ekf.png")
     ap.add_argument("--title", type=str, default="Offset Sensor Trajectory")
-    ap.add_argument("--max-pedestrians", type=int, default=30)
+    ap.add_argument("--max-pedestrians", type=int, default=50)
     ap.add_argument("--refresh-hz", type=float, default=10.0, help="Plot refresh rate.")
     ap.add_argument("--max-time-gap", type=float, default=0.2, help="Max time gap (seconds) to consider same object.")
     ap.add_argument("--max-distance-gap", type=float, default=0.5, help="Max distance gap (meters) to consider same object.")
-    ap.add_argument("--min-sensor-distance", type=float, default=0.45, help="Minimum distance from sensor to consider pedestrian valid (filter false positives).")
-    ap.add_argument("--max-sensor-distance", type=float, default=2.5, help="Maximum distance from sensor to consider pedestrian valid (filter false positives).")
+    ap.add_argument("--sensor-noise-thresh", type=float, default=0.45, help="Remove detections closer than this distance to the sensor as noise.")
+    ap.add_argument("--min-sensor-distance", type=float, default=2.5, help="If the closest remaining detection is farther than this distance from the sensor, return no pedestrian tracks.")
+    ap.add_argument("--max-sensor-distance", type=float, default=50, help="Keep only detections within this maximum distance from the sensor.")
     ap.add_argument("--min-track-states", type=int, default=2, help="Minimum number of filtered states required before a pedestrian track is considered valid.")
     ap.add_argument("--min-prediction-speed", type=float, default=0.5, help="Suppress predicted offset when robot linear speed is below this threshold.")
+    ap.add_argument("--visualize", action="store_true", help="Show the trajectory plot in real time.")
     ap.add_argument("--write-record", action="store_true", default=True, help="Write per-frame filtered robot/pedestrian snapshots to a JSON record file.")
     ap.add_argument("--record-path", type=str, default="record.json", help="Path to the JSON record file.")
     ap.add_argument("--show-frame", type=int, default=None, help="Number of recent frames to show in trajectories. If not set, show all history.")
+    ap.add_argument("--idle-timeout", type=float, default=0.5, help="If both topics are quiet for at least this many wall-clock seconds, begin auto-stop.")
+    ap.add_argument("--shutdown-grace-seconds", type=float, default=2.0, help="After files are saved, keep the process alive for this many seconds before exiting.")
     args = ap.parse_args()
 
     rospy.init_node("offset_plotter", anonymous=True)
@@ -625,25 +742,79 @@ def main() -> None:
         refresh_hz=args.refresh_hz,
         max_time_gap=args.max_time_gap,
         max_distance_gap=args.max_distance_gap,
+        sensor_noise_thresh=args.sensor_noise_thresh,
         min_sensor_distance=args.min_sensor_distance,
         max_sensor_distance=args.max_sensor_distance,
         min_track_states=args.min_track_states,
         min_prediction_speed=args.min_prediction_speed,
+        visualize=args.visualize,
         write_record=args.write_record,
         record_path=args.record_path,
+        stats_path=args.stats_path,
         show_frame=args.show_frame,
+        idle_timeout=args.idle_timeout,
+        shutdown_grace_seconds=args.shutdown_grace_seconds,
     )
-    rospy.on_shutdown(plotter.shutdown)
-
-    rate = rospy.Rate(args.refresh_hz)
     try:
-        while not rospy.is_shutdown() and not plotter.window_closed:
-            plotter.redraw()
-            rate.sleep()
-    except KeyboardInterrupt:
-        plotter.shutdown()
+        while not rospy.is_shutdown():
+            should_redraw = False
+            should_finalize = False
+            now_wall = time.monotonic()
+            if plotter.visualize:
+                with plotter.data_lock:
+                    should_redraw = plotter.pending_redraw
+                    plotter.pending_redraw = False
+
+            with plotter.data_lock:
+                if plotter.first_sensor_msg_wall_time is not None:
+                    sensor_quiet = (
+                        plotter.last_sensor_msg_wall_time is not None
+                        and now_wall - plotter.last_sensor_msg_wall_time >= plotter.idle_timeout
+                    )
+                    if sensor_quiet:
+                        if plotter.active_sensor_callback_count == 0 and not plotter.finalizing:
+                            rospy.loginfo(
+                                "Sensor topic idle for %.2f s; preparing to save.",
+                                plotter.idle_timeout,
+                            )
+                            plotter.finalizing = True
+                            should_finalize = True
+                        elif not plotter.finalizing and not plotter.idle_wait_logged:
+                            rospy.loginfo(
+                                "Sensor topic is idle, but waiting for %d in-flight sensor callback(s) before saving.",
+                                plotter.active_sensor_callback_count,
+                            )
+                            plotter.idle_wait_logged = True
+                    else:
+                        plotter.idle_wait_logged = False
+
+            if should_finalize:
+                plotter.save_results_once()
+                with plotter.data_lock:
+                    plotter.save_completed_wall_time = time.monotonic()
+                rospy.loginfo(
+                    "Save complete. Waiting %.2f s before exit.",
+                    plotter.shutdown_grace_seconds,
+                )
+
+            with plotter.data_lock:
+                save_completed_wall_time = plotter.save_completed_wall_time
+            if save_completed_wall_time is not None:
+                if now_wall - save_completed_wall_time >= plotter.shutdown_grace_seconds:
+                    plotter.close_figure()
+                    break
+
+            if should_redraw:
+                plotter.redraw()
+            else:
+                rospy.sleep(0.01)
+    except (KeyboardInterrupt, rospy.ROSInterruptException) as exc:
+        plotter.log_autostop_state(f"Interrupted ({type(exc).__name__})")
+        with plotter.data_lock:
+            plotter.finalizing = True
+        plotter.save_results_once()
     finally:
-        plotter.shutdown()
+        plotter.close_figure()
 
 
 if __name__ == "__main__":

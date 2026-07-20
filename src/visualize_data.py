@@ -23,6 +23,23 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
+def should_visualize_residual(
+    residual: np.ndarray,
+    velocity: np.ndarray,
+    offset_angle_deg: float,
+) -> bool:
+    residual_norm = float(np.linalg.norm(residual))
+    velocity_norm = float(np.linalg.norm(velocity))
+    if residual_norm == 0.0 or velocity_norm == 0.0:
+        return True
+
+    cos_theta = float(np.dot(residual, velocity) / (residual_norm * velocity_norm))
+    cos_theta = float(np.clip(cos_theta, -1.0, 1.0))
+    angle_deg = float(np.degrees(np.arccos(cos_theta)))
+
+    return offset_angle_deg <= angle_deg <= (180.0 - offset_angle_deg)
+
+
 def infer_num_nodes(attrib: dict) -> int:
     max_i = -1
     for k in attrib.keys():
@@ -127,6 +144,7 @@ def load_global_sequence(
 
     return {
         "robot_positions": robot_positions,
+        "robot_velocities": robot_velocities,
         "pedestrian_positions": pedestrian_positions,
         "cv_pred_positions": np.stack(cv_pred_positions, axis=0),
         "cv_residuals": np.stack(cv_residuals, axis=0),
@@ -140,12 +158,14 @@ def load_global_sequence(
 
 def plot_global_trajectory(
     robot_positions: np.ndarray,
+    robot_velocities: np.ndarray,
     pedestrian_positions: np.ndarray,
     cv_pred_positions: np.ndarray,
     cv_residuals: np.ndarray,
     kept_indices: np.ndarray,
     xml_path: str,
     save_path: str = "visualize_data.png",
+    offset_angle: float = 45.0,
 ) -> None:
     fig, ax = plt.subplots(figsize=(10, 8))
 
@@ -185,8 +205,11 @@ def plot_global_trajectory(
         label="CV prediction",
     )
 
-    for pred, t in zip(cv_pred_positions, kept_indices):
+    for pred, residual, t in zip(cv_pred_positions, cv_residuals, kept_indices):
         actual = robot_positions[t]
+        velocity = robot_velocities[t]
+        if not should_visualize_residual(residual, velocity, offset_angle):
+            continue
         ax.annotate(
             "",
             xy=actual,
@@ -237,6 +260,12 @@ def main() -> None:
     parser.add_argument("--d_thresh", type=float, default=2.5, help="Distance threshold to keep a frame.")
     parser.add_argument("--strict-less",action="store_true",default=True,help="Keep only frames with d_min < d_thresh.",)
     parser.add_argument("--non-strict-less",dest="strict_less",action="store_false",help="Keep frames with d_min <= d_thresh.",)
+    parser.add_argument(
+        "--offset_angle",
+        type=float,
+        default=45.0,
+        help="Hide residual arrows whose angle to the current robot velocity is within this many degrees of 0 or 180.",
+    )
     parser.add_argument("--save-path",type=str,default="visualize_data.png",help="Output plot file path.",)
     args = parser.parse_args()
 
@@ -252,12 +281,14 @@ def main() -> None:
 
     plot_global_trajectory(
         robot_positions=sequence["robot_positions"],
+        robot_velocities=sequence["robot_velocities"],
         pedestrian_positions=sequence["pedestrian_positions"],
         cv_pred_positions=sequence["cv_pred_positions"],
         cv_residuals=sequence["cv_residuals"],
         kept_indices=sequence["kept_indices"],
         xml_path=xml_path,
         save_path=args.save_path,
+        offset_angle=args.offset_angle,
     )
 
 # a standalone script that visualizes raw Unity trajectory data from a single XML file, plotting the robot's global trajectory, pedestrian trajectories, CV-based predicted robot positions, and residual arrows from CV prediction to actual robot position, while allowing filtering based on nearest pedestrian distance.

@@ -4,10 +4,23 @@ from __future__ import annotations
 import argparse
 import json
 import math
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+import numpy as np
+
+from utils import ConstantVelocityEKF
 
 
 Vec2 = Tuple[float, float]
+
+
+def parse_bool_arg(value: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
 
 
 def load_frames(record_path: str) -> List[Dict[str, Any]]:
@@ -35,52 +48,107 @@ def extract_original_path(frames: Sequence[Dict[str, Any]]) -> List[Dict[str, An
     return path
 
 
-def estimate_offset_velocities(frames: Sequence[Dict[str, Any]]) -> List[Vec2]:
-    n = len(frames)
-    if n == 0:
-        return []
-    if n == 1:
-        return [(0.0, 0.0)]
-
-    positions = [frame["offset_position"] for frame in frames]
-    times = [float(frame["timestamp"]) for frame in frames]
-    velocities: List[Vec2] = []
-
-    for i in range(n):
-        if i == 0:
-            j0, j1 = 0, 1
-        elif i == n - 1:
-            j0, j1 = n - 2, n - 1
-        else:
-            j0, j1 = i - 1, i + 1
-
-        dt = times[j1] - times[j0]
-        if dt <= 0.0:
-            velocities.append((0.0, 0.0))
-            continue
-
-        dx = float(positions[j1][0]) - float(positions[j0][0])
-        dy = float(positions[j1][1]) - float(positions[j0][1])
-        velocities.append((dx / dt, dy / dt))
-
-    return velocities
-
-
 def extract_offset_path(frames: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    velocities = estimate_offset_velocities(frames)
     path = []
-    for frame, velocity in zip(frames, velocities):
+    for frame in frames:
         position = frame["offset_position"]
+        sensor_state = frame["sensor_filtered_state"]
         path.append(
             {
                 "frame_index": int(frame["frame_index"]),
                 "timestamp": float(frame["timestamp"]),
                 "position": (float(position[0]), float(position[1])),
-                "velocity": velocity,
+                "velocity": (float(sensor_state[2]), float(sensor_state[3])),
                 "pedestrians": frame.get("pedestrian_tracks", []),
             }
         )
     return path
+
+
+def filter_offset_path(path: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not path:
+        return []
+
+    ekf = ConstantVelocityEKF(
+        process_noise_position=3,
+        process_noise_velocity=1.0, 
+        measurement_noise=0.002)
+    
+    filtered_path: List[Dict[str, Any]] = []
+    prev_timestamp: Optional[float] = None
+
+    for item in path:
+        timestamp = float(item["timestamp"])
+        curr_x, curr_y = item["position"]
+
+        if ekf.state is None:
+            ekf.initialize(float(curr_x), float(curr_y))
+        elif prev_timestamp is not None:
+            ekf.predict(timestamp - prev_timestamp)
+
+        filtered_state = ekf.update(np.array([curr_x, curr_y], dtype=np.float64))
+        filtered_item = dict(item)
+        filtered_item["position"] = (float(filtered_state[0]), float(filtered_state[1]))
+        filtered_path.append(filtered_item)
+        prev_timestamp = timestamp
+
+    return filtered_path
+
+
+def compute_social_force_offset(position: Vec2, pedestrians: Sequence[Dict[str, Any]]) -> Vec2:
+    total_fx = 0.0
+    total_fy = 0.0
+    robot_x, robot_y = position
+
+    for ped in pedestrians:
+        px, py, vx, vy = ped["filtered_state"]
+        diff_x = robot_x - (float(px) + float(vx))
+        diff_y = robot_y - (float(py) + float(vy))
+        dist = math.hypot(diff_x, diff_y)
+        if dist < 1e-3:
+            continue
+
+        direction_x = diff_x / dist
+        direction_y = diff_y / dist
+        force_mag = math.exp(-dist / 0.5) * 1
+        total_fx += force_mag * direction_x
+        total_fy += force_mag * direction_y
+
+    return (total_fx, total_fy)
+
+
+def extract_social_force_offset_path(frames: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    path = []
+    for frame in frames:
+        sensor_state = frame["sensor_filtered_state"]
+        sensor_pos = (float(sensor_state[0]), float(sensor_state[1]))
+        pedestrians = frame.get("pedestrian_tracks", [])
+        offset = compute_social_force_offset(sensor_pos, pedestrians)
+        path.append(
+            {
+                "frame_index": int(frame["frame_index"]),
+                "timestamp": float(frame["timestamp"]),
+                "position": (sensor_pos[0] + offset[0], sensor_pos[1] + offset[1]),
+                "velocity": (float(sensor_state[2]), float(sensor_state[3])),
+                "pedestrians": pedestrians,
+            }
+        )
+    return path
+
+
+def summarize_samples(samples: Sequence[float]) -> Dict[str, float]:
+    if not samples:
+        return {
+            "mean": math.inf,
+            "std": math.inf,
+        }
+
+    mean = sum(samples) / len(samples)
+    variance = sum((value - mean) * (value - mean) for value in samples) / len(samples)
+    return {
+        "mean": mean,
+        "std": math.sqrt(variance),
+    }
 
 
 def calculate_path_length(path: Sequence[Dict[str, Any]]) -> float:
@@ -123,22 +191,6 @@ def calculate_path_irregularity(path: Sequence[Dict[str, Any]], eps_len: float =
     return (total_abs_turn / path_length) if path_length >= eps_len else 0.0
 
 
-def calculate_closest_pedestrian_distance(path: Sequence[Dict[str, Any]]) -> float:
-    per_waypoint_minima: List[float] = []
-    for item in path:
-        rx, ry = item["position"]
-        waypoint_best = math.inf
-        for ped in item["pedestrians"]:
-            px, py, _, _ = ped["filtered_state"]
-            waypoint_best = min(waypoint_best, math.hypot(float(px) - rx, float(py) - ry))
-        if not math.isinf(waypoint_best):
-            per_waypoint_minima.append(waypoint_best)
-
-    if not per_waypoint_minima:
-        return math.inf
-    return sum(per_waypoint_minima) / len(per_waypoint_minima)
-
-
 def compute_ttc(robot_pos: Vec2, robot_vel: Vec2, ped_pos: Vec2, ped_vel: Vec2, collision_radius: float) -> float:
     rx = ped_pos[0] - robot_pos[0]
     ry = ped_pos[1] - robot_pos[1]
@@ -169,13 +221,48 @@ def compute_ttc(robot_pos: Vec2, robot_vel: Vec2, ped_pos: Vec2, ped_vel: Vec2, 
     return math.inf
 
 
-def calculate_min_ttc(path: Sequence[Dict[str, Any]], collision_radius: float) -> float:
+def iter_pedestrians_within_distance(
+    pedestrians: Sequence[Dict[str, Any]],
+    robot_pos: Vec2,
+    max_sensor_distance: float,
+):
+    rx, ry = robot_pos
+    for ped in pedestrians:
+        px, py, _, _ = ped["filtered_state"]
+        distance = math.hypot(float(px) - rx, float(py) - ry)
+        if distance <= max_sensor_distance:
+            yield ped
+
+
+def calculate_closest_pedestrian_distance(
+    path: Sequence[Dict[str, Any]],
+    max_sensor_distance: float,
+) -> Dict[str, float]:
     per_waypoint_minima: List[float] = []
+    for item in path:
+        rx, ry = item["position"]
+        waypoint_best = math.inf
+        for ped in iter_pedestrians_within_distance(item["pedestrians"], (rx, ry), max_sensor_distance):
+            px, py, _, _ = ped["filtered_state"]
+            waypoint_best = min(waypoint_best, math.hypot(float(px) - rx, float(py) - ry))
+        if not math.isinf(waypoint_best):
+            per_waypoint_minima.append(waypoint_best)
+
+    return summarize_samples(per_waypoint_minima)
+
+
+def calculate_min_ttc(
+    path: Sequence[Dict[str, Any]],
+    collision_radius: float,
+    max_sensor_distance: float,
+) -> Dict[str, float]:
+    per_waypoint_minima: List[float] = []
+    collision_count = 0
     for item in path:
         robot_pos = item["position"]
         robot_vel = item["velocity"]
         waypoint_best = math.inf
-        for ped in item["pedestrians"]:
+        for ped in iter_pedestrians_within_distance(item["pedestrians"], robot_pos, max_sensor_distance):
             px, py, vx, vy = ped["filtered_state"]
             ttc = compute_ttc(
                 robot_pos=robot_pos,
@@ -187,18 +274,19 @@ def calculate_min_ttc(path: Sequence[Dict[str, Any]], collision_radius: float) -
             waypoint_best = min(waypoint_best, ttc)
         if not math.isinf(waypoint_best):
             per_waypoint_minima.append(waypoint_best)
+            collision_count += 1
 
-    if not per_waypoint_minima:
-        return math.inf
-    return sum(per_waypoint_minima) / len(per_waypoint_minima)
+    stats = summarize_samples(per_waypoint_minima)
+    stats["collision_count"] = collision_count
+    return stats
 
 
-def evaluate_path(path: Sequence[Dict[str, Any]], collision_radius: float) -> Dict[str, float]:
+def evaluate_path(path: Sequence[Dict[str, Any]], collision_radius: float, max_sensor_distance: float) -> Dict[str, Any]:
     return {
         "path_length": calculate_path_length(path),
         "path_irregularity": calculate_path_irregularity(path),
-        "closest_pedestrian_distance": calculate_closest_pedestrian_distance(path),
-        "minimum_time_to_collision": calculate_min_ttc(path, collision_radius),
+        "closest_pedestrian_distance": calculate_closest_pedestrian_distance(path, max_sensor_distance),
+        "minimum_time_to_collision": calculate_min_ttc(path, collision_radius, max_sensor_distance),
     }
 
 
@@ -208,34 +296,51 @@ def format_metric(value: float) -> str:
     return f"{value:.6f}"
 
 
+def format_mean_std(stats: Dict[str, float]) -> str:
+    return f"{format_metric(stats['mean'])}, \u00b1 {format_metric(stats['std'])}"
+
+
+def format_mean_std_collision(stats: Dict[str, float]) -> str:
+    return f"{format_metric(stats['mean'])}, \u00b1 {format_metric(stats['std'])}, ({int(stats['collision_count'])})"
+
+
 def write_report(
     output_path: str,
     record_path: str,
     frame_count: int,
     collision_radius: float,
-    original_metrics: Dict[str, float],
-    offset_metrics: Dict[str, float],
+    max_sensor_distance: float,
+    original_metrics: Dict[str, Any],
+    offset_metrics: Dict[str, Any],
+    social_force_offset_metrics: Dict[str, Any],
 ) -> None:
     lines = [
         f"record_path: {record_path}",
         f"frame_count: {frame_count}",
         f"collision_radius: {collision_radius:.6f}",
+        f"max_sensor_distance: {max_sensor_distance:.6f}",
         "",
         "[original_path]",
         f"path_length: {format_metric(original_metrics['path_length'])}",
         f"path_irregularity: {format_metric(original_metrics['path_irregularity'])}",
-        f"closest_pedestrian_distance: {format_metric(original_metrics['closest_pedestrian_distance'])}",
-        f"minimum_time_to_collision: {format_metric(original_metrics['minimum_time_to_collision'])}",
+        f"closest_pedestrian_distance: {format_mean_std(original_metrics['closest_pedestrian_distance'])}",
+        f"minimum_time_to_collision: {format_mean_std_collision(original_metrics['minimum_time_to_collision'])}",
         "",
         "[offset_path]",
         f"path_length: {format_metric(offset_metrics['path_length'])}",
         f"path_irregularity: {format_metric(offset_metrics['path_irregularity'])}",
-        f"closest_pedestrian_distance: {format_metric(offset_metrics['closest_pedestrian_distance'])}",
-        f"minimum_time_to_collision: {format_metric(offset_metrics['minimum_time_to_collision'])}",
+        f"closest_pedestrian_distance: {format_mean_std(offset_metrics['closest_pedestrian_distance'])}",
+        f"minimum_time_to_collision: {format_mean_std_collision(offset_metrics['minimum_time_to_collision'])}",
+        "",
+        "[social_force_offset_path]",
+        f"path_length: {format_metric(social_force_offset_metrics['path_length'])}",
+        f"path_irregularity: {format_metric(social_force_offset_metrics['path_irregularity'])}",
+        f"closest_pedestrian_distance: {format_mean_std(social_force_offset_metrics['closest_pedestrian_distance'])}",
+        f"minimum_time_to_collision: {format_mean_std_collision(social_force_offset_metrics['minimum_time_to_collision'])}",
         "",
     ]
 
-    with open(output_path, "w", encoding="ascii") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
 
@@ -244,22 +349,31 @@ def main() -> None:
     ap.add_argument("--record-path", type=str, default="record.json")
     ap.add_argument("--output-path", type=str, default="evaluation.txt")
     ap.add_argument("--collision-radius", type=float, default=1.0)
+    ap.add_argument("--max-sensor-distance", dest="max_sensor_distance", type=float, default=50.0)
+    ap.add_argument("--ekf", type=parse_bool_arg, nargs="?", const=True, default=True)
+    ap.add_argument("--no-ekf", dest="ekf", action="store_false")
     args = ap.parse_args()
 
     frames = load_frames(args.record_path)
     original_path = extract_original_path(frames)
     offset_path = extract_offset_path(frames)
+    if args.ekf:
+        offset_path = filter_offset_path(offset_path)
+    social_force_offset_path = extract_social_force_offset_path(frames)
 
-    original_metrics = evaluate_path(original_path, args.collision_radius)
-    offset_metrics = evaluate_path(offset_path, args.collision_radius)
+    original_metrics = evaluate_path(original_path, args.collision_radius, args.max_sensor_distance)
+    offset_metrics = evaluate_path(offset_path, args.collision_radius, args.max_sensor_distance)
+    social_force_offset_metrics = evaluate_path(social_force_offset_path, args.collision_radius, args.max_sensor_distance)
 
     write_report(
         output_path=args.output_path,
         record_path=args.record_path,
         frame_count=len(frames),
         collision_radius=args.collision_radius,
+        max_sensor_distance=args.max_sensor_distance,
         original_metrics=original_metrics,
         offset_metrics=offset_metrics,
+        social_force_offset_metrics=social_force_offset_metrics,
     )
 
     print(f"Evaluation complete. Results written to '{args.output_path}'.")

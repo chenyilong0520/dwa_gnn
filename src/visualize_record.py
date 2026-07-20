@@ -8,9 +8,20 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 
+from utils import ConstantVelocityEKF
+
 
 Point3 = Tuple[float, float, float]
 TrackedState = Tuple[float, float, float, float, float]
+
+
+def parse_bool_arg(value: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
 
 
 def load_frames(record_path: str) -> List[Dict[str, Any]]:
@@ -60,6 +71,41 @@ def build_offset_positions(frames: Sequence[Dict[str, Any]]) -> List[Tuple[float
         (float(frame["offset_position"][0]), float(frame["offset_position"][1]))
         for frame in frames
     ]
+
+
+def filter_offset_positions(
+    frames: Sequence[Dict[str, Any]],
+    offset_positions: Sequence[Tuple[float, float]],
+) -> List[Tuple[float, float]]:
+    if not frames or not offset_positions:
+        return []
+
+    if len(frames) != len(offset_positions):
+        raise ValueError("frames and offset_positions must have the same length.")
+
+    ekf = ConstantVelocityEKF(
+        process_noise_position=3,
+        process_noise_velocity=1.0, 
+        measurement_noise=0.002)
+    
+    filtered_positions: List[Tuple[float, float]] = []
+    prev_timestamp: Optional[float] = None
+
+    for frame, offset_position in zip(frames, offset_positions):
+        timestamp = float(frame["timestamp"])
+        curr_x = float(offset_position[0])
+        curr_y = float(offset_position[1])
+
+        if ekf.state is None:
+            ekf.initialize(curr_x, curr_y)
+        elif prev_timestamp is not None:
+            ekf.predict(timestamp - prev_timestamp)
+
+        filtered_state = ekf.update(np.array([curr_x, curr_y], dtype=np.float64))
+        filtered_positions.append((float(filtered_state[0]), float(filtered_state[1])))
+        prev_timestamp = timestamp
+
+    return filtered_positions
 
 
 def build_pedestrian_tracks(frames: Sequence[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
@@ -118,28 +164,28 @@ def draw_on_axis(
         filtered_states = track["filtered_states"]
         segments = build_segments(filtered_states)
 
-        # for prev_x, prev_y, curr_x, curr_y, speed in segments:
-        #     dx = curr_x - prev_x
-        #     dy = curr_y - prev_y
-        #     scale = min(speed * 0.1, 1.0)
-        #     ax.arrow(prev_x, prev_y, dx * scale, dy * scale, head_width=0.1, head_length=0.2, fc=color, ec=color, alpha=0.6)
+        for prev_x, prev_y, curr_x, curr_y, speed in segments:
+            dx = curr_x - prev_x
+            dy = curr_y - prev_y
+            scale = min(speed * 0.1, 1.0)
+            ax.arrow(prev_x, prev_y, dx * scale, dy * scale, head_width=0.1, head_length=0.2, fc=color, ec=color, alpha=0.6)
 
-        if filtered_states:
-            state_array = np.array([(x, y) for x, y, _, _, _ in filtered_states], dtype=np.float32)
-            ax.plot(state_array[:, 0], state_array[:, 1], color=color, linewidth=1.5, alpha=0.8)
-            curr_x, curr_y, curr_vx, curr_vy, _ = filtered_states[-1]
-            ax.scatter(curr_x, curr_y, c=[color], s=50, marker="o", label=f"ped {track_id}")
-            ax.arrow(
-                curr_x,
-                curr_y,
-                curr_vx * 0.3,
-                curr_vy * 0.3,
-                head_width=0.1,
-                head_length=0.15,
-                fc=color,
-                ec=color,
-                alpha=0.9,
-            )
+        # if filtered_states:
+        #     state_array = np.array([(x, y) for x, y, _, _, _ in filtered_states], dtype=np.float32)
+        #     ax.plot(state_array[:, 0], state_array[:, 1], color=color, linewidth=1.5, alpha=0.8)
+        #     curr_x, curr_y, curr_vx, curr_vy, _ = filtered_states[-1]
+        #     ax.scatter(curr_x, curr_y, c=[color], s=50, marker="o", label=f"ped {track_id}")
+        #     ax.arrow(
+        #         curr_x,
+        #         curr_y,
+        #         curr_vx * 0.3,
+        #         curr_vy * 0.3,
+        #         head_width=0.1,
+        #         head_length=0.15,
+        #         fc=color,
+        #         ec=color,
+        #         alpha=0.9,
+        #     )
 
     all_points: List[Tuple[float, float]] = []
     all_points.extend([(x, y) for x, y, _ in sensor_positions])
@@ -171,6 +217,8 @@ def main() -> None:
     ap.add_argument("--end-frame", type=int, default=None)
     ap.add_argument("--title", type=str, default="Recorded Sensor / Offset / Pedestrian Trajectories")
     ap.add_argument("--save-path", type=str, default="visualize_record.png")
+    ap.add_argument("--ekf", type=parse_bool_arg, nargs="?", const=True, default=True)
+    ap.add_argument("--no-ekf", dest="ekf", action="store_false")
     args = ap.parse_args()
 
     frames = load_frames(args.record_path)
@@ -180,6 +228,8 @@ def main() -> None:
 
     sensor_positions = build_sensor_positions(selected_frames)
     offset_positions = build_offset_positions(selected_frames)
+    if args.ekf:
+        offset_positions = filter_offset_positions(selected_frames, offset_positions)
     pedestrian_tracks = build_pedestrian_tracks(selected_frames)
 
     fig, ax = plt.subplots(figsize=(10, 10))

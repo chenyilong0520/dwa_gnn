@@ -57,16 +57,17 @@ def set_seed(seed: int):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
-def plot_loss_history(train_losses, val_losses, save_path):
+def plot_loss_history(train_losses, train_targets, val_losses, save_path):
     """
     Plots the loss history
     """
     plt.figure()
     epochs = np.arange(1, len(train_losses) + 1)
-    plt.plot(epochs, train_losses, label="train_mse")
-    plt.plot(epochs, val_losses, label="val_mse")
+    plt.plot(epochs, train_losses, label="train_loss")
+    plt.plot(epochs, train_targets, label="train_target")
+    plt.plot(epochs, val_losses, label="val_loss")
     plt.xlabel("Epoch")
-    plt.ylabel("Loss (MSE)")
+    plt.ylabel("Loss")
     plt.title("Training & Validation Loss")
     plt.legend()
     plt.grid(True)
@@ -173,11 +174,13 @@ def save_graph_samples_npz(npz_path: str, samples) -> None:
 # Loading gnn models
 # =========================
 
-def load_model(checkpoint_path:str)->SocialForceGNN:
+def load_model(checkpoint_path:str)->torch.nn.Module:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     ckpt = torch.load(checkpoint_path, map_location=device,weights_only=True)
     print(checkpoint_path+" loaded.")
-    model = SocialForceGNN(
+    model_name = ckpt.get("model_name", ckpt["args"].get("model", "SocialForceGNN"))
+    model = build_model(
+        model_name,
         node_dim=5,
         edge_dim=7,
         hidden_dim=ckpt["args"].get("hidden_dim", 128),
@@ -422,3 +425,71 @@ def compute_edge_attr(x: np.ndarray, edge_index: np.ndarray) -> np.ndarray:
         [dx, dy, dvx, dvy, d, np.sin(theta), np.cos(theta)],
         axis=1
     ).astype(np.float32)
+
+class ConstantVelocityEKF:
+    def __init__(
+        self,
+        process_noise_position: float = 0.5,
+        process_noise_velocity: float = 1.0,
+        measurement_noise: float = 0.15,
+        initial_covariance: float = 10.0,
+    ) -> None:
+        self.process_noise_position = process_noise_position
+        self.process_noise_velocity = process_noise_velocity
+        self.measurement_noise = measurement_noise
+        self.initial_covariance = initial_covariance
+        self.state: Optional[np.ndarray] = None
+        self.covariance: Optional[np.ndarray] = None
+
+    def initialize(self, x: float, y: float) -> None:
+        self.state = np.array([x, y, 0.0, 0.0], dtype=np.float64)
+        self.covariance = np.eye(4, dtype=np.float64) * self.initial_covariance
+
+    def predict(self, dt: float) -> None:
+        if self.state is None or self.covariance is None or dt <= 0.0:
+            return
+
+        F = np.array(
+            [
+                [1.0, 0.0, dt, 0.0],
+                [0.0, 1.0, 0.0, dt],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+
+        dt2 = dt * dt
+        q_pos = self.process_noise_position
+        q_vel = self.process_noise_velocity
+        Q = np.array(
+            [
+                [0.25 * dt2 * dt2 * q_pos, 0.0, 0.5 * dt2 * dt * q_pos, 0.0],
+                [0.0, 0.25 * dt2 * dt2 * q_pos, 0.0, 0.5 * dt2 * dt * q_pos],
+                [0.5 * dt2 * dt * q_pos, 0.0, dt2 * q_vel, 0.0],
+                [0.0, 0.5 * dt2 * dt * q_pos, 0.0, dt2 * q_vel],
+            ],
+            dtype=np.float64,
+        )
+
+        self.state = F @ self.state
+        self.covariance = F @ self.covariance @ F.T + Q
+
+    def update(self, measurement: np.ndarray) -> np.ndarray:
+        if self.state is None or self.covariance is None:
+            raise RuntimeError("EKF must be initialized before update().")
+
+        H = np.array([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]], dtype=np.float64)
+        R = np.eye(2, dtype=np.float64) * self.measurement_noise
+        innovation = measurement - self.measurement_function(self.state)
+        S = H @ self.covariance @ H.T + R
+        K = self.covariance @ H.T @ np.linalg.inv(S)
+
+        self.state = self.state + K @ innovation
+        identity = np.eye(4, dtype=np.float64)
+        self.covariance = (identity - K @ H) @ self.covariance
+        return self.state.copy()
+
+    @staticmethod
+    def measurement_function(state: np.ndarray) -> np.ndarray:
+        return state[:2]

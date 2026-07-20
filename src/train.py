@@ -43,6 +43,7 @@ import torch.nn.functional as F
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 from torch_geometric.nn import MessagePassing, global_mean_pool
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 import matplotlib.pyplot as plt
 from gnn import *
@@ -52,22 +53,42 @@ from utils import *
 # Train / Eval
 # ----------------------------
 
+def compute_regression_loss(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    loss_name: str,
+    huber_delta: float = 1.0,
+    reduction: str = "mean",
+) -> torch.Tensor:
+    if loss_name == "mse":
+        return F.mse_loss(pred, target, reduction=reduction)
+    if loss_name == "huber":
+        return F.huber_loss(pred, target, delta=huber_delta, reduction=reduction)
+    raise ValueError(f"Unsupported loss '{loss_name}'")
+
+
 @torch.no_grad()
-def evaluate(model: nn.Module, loader: DataLoader, device: torch.device) -> Tuple[float, float]:
+def evaluate(
+    model: nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+    loss_name: str,
+    huber_delta: float,
+) -> float:
     model.eval()
-    mse_sum = 0.0
-    mae_sum = 0.0
+    loss_sum = 0.0
     n = 0
     for batch in loader:
         batch = batch.to(device)
         pred = model(batch)                  # [B,2]
         y = batch.y.view(-1, 2)              # [B,2]
-        mse = F.mse_loss(pred, y, reduction="sum").item()
-        mae = F.l1_loss(pred, y, reduction="sum").item()
-        mse_sum += mse
-        mae_sum += mae
+        loss = compute_regression_loss(
+            pred, y, loss_name=loss_name, huber_delta=huber_delta, reduction="sum"
+        ).item()
+        loss_sum += loss
         n += y.shape[0]
-    return mse_sum / max(n, 1), mae_sum / max(n, 1)
+    denom = max(n, 1)
+    return loss_sum / denom
 
 
 def compute_edge_attr_torch(x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
@@ -131,6 +152,8 @@ def train_one_epoch(
     loader: DataLoader,
     opt: torch.optim.Optimizer,
     device: torch.device,
+    loss_name: str = "huber",
+    huber_delta: float = 1.0,
     use_consistency_loss: bool = False,
     use_symmetry_loss: bool = False,
     lambda_cons: float = 0.1,
@@ -138,39 +161,54 @@ def train_one_epoch(
     sigma_pos: float = 0.03,
     sigma_vel: float = 0.05,
     supervise_noisy: bool = True,
-) -> float:
+) -> Tuple[float, float]:
     model.train()
-    total = 0.0
+    pure_total = 0.0
+    objective_total = 0.0
     n = 0
     for batch in loader:
         batch = batch.to(device)
         opt.zero_grad(set_to_none=True)
         pred = model(batch)
         y = batch.y.view(-1, 2)
-        loss = F.mse_loss(pred, y)
+        pure_loss = compute_regression_loss(
+            pred, y, loss_name=loss_name, huber_delta=huber_delta
+        )
+        loss = pure_loss
 
         if use_consistency_loss:
             noisy_batch = make_noisy_batch(batch, sigma_pos=sigma_pos, sigma_vel=sigma_vel)
             noisy_pred = model(noisy_batch)
-            consistency_loss = F.mse_loss(pred, noisy_pred)
+            consistency_loss = compute_regression_loss(
+                pred, noisy_pred, loss_name=loss_name, huber_delta=huber_delta
+            )
             loss = loss + lambda_cons * consistency_loss
             if supervise_noisy:
-                loss = loss + F.mse_loss(noisy_pred, y)
+                loss = loss + compute_regression_loss(
+                    noisy_pred, y, loss_name=loss_name, huber_delta=huber_delta
+                )
 
         if use_symmetry_loss:
             symmetry_batch = make_symmetry_batch(batch)
             symmetry_pred = model(symmetry_batch)
             pred_expected_symmetry = pred.clone()
             pred_expected_symmetry[:, 1] *= -1.0
-            symmetry_loss = F.mse_loss(symmetry_pred, pred_expected_symmetry)
+            symmetry_loss = compute_regression_loss(
+                symmetry_pred,
+                pred_expected_symmetry,
+                loss_name=loss_name,
+                huber_delta=huber_delta,
+            )
             loss = loss + lambda_sym * symmetry_loss
 
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), 5.0)
         opt.step()
-        total += loss.item() * y.shape[0]
+        pure_total += pure_loss.item() * y.shape[0]
+        objective_total += loss.item() * y.shape[0]
         n += y.shape[0]
-    return total / max(n, 1)
+    denom = max(n, 1)
+    return pure_total / denom, objective_total / denom
 
 
 def format_float_for_filename(value: float) -> str:
@@ -236,7 +274,11 @@ def main():
     ap.add_argument("--lr", type=float, default=5e-4)
     ap.add_argument("--hidden_dim", type=int, default=64)
     ap.add_argument("--num_layers", type=int, default=3)
+    ap.add_argument("--dropout_p", type=float, default=0.1, help="Dropout probability used in the model.")
     ap.add_argument("--weight_decay", type=float, default=5e-4)
+    ap.add_argument("--loss",type=str,default="huber",choices=["mse", "huber"],help="Base regression loss used for train loss, eval loss, and regularization terms.",)
+    ap.add_argument("--huber_delta",type=float,default=1.0,help="Delta parameter for Huber loss when --loss huber is selected.",)
+    ap.add_argument("--model", type=str, default="SocialForceGNN", choices=["SocialForceGNN", "SimpleAttentionSocialForceGNN", "InteractionPoolNet"],help="GNN architecture to train.",)
     
     ap.add_argument("--consistency_loss",action="store_true",default=False,help="Enable consistency regularization with Gaussian noise on pedestrian pos/vel.",)
     ap.add_argument("--symmetry_loss",action="store_true",default=False,help="Enable y-flip equivariance regularization on mirrored inputs.",)
@@ -251,7 +293,7 @@ def main():
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--val_ratio", type=float, default=0.2, help="Fraction of sequences used for validation")
     ap.add_argument("--save_path", type=str, default="gnn_model.pt")
-    ap.add_argument("--filtered_files_json",type=str,default="data/filtered_files.json",help="Optional JSON file listing sequence numbers to keep before the train/val split.",)
+    ap.add_argument("--filtered_files_json",type=str, help="Optional JSON file listing sequence numbers to keep before the train/val split.",)
     args = ap.parse_args()
 
     set_seed(args.seed)
@@ -320,19 +362,19 @@ def main():
 
     print("Found NPZ sequences:", num_seqs)
     print("Train sequences:", len(train_files))
-    for f in train_files:
-        print("  -", os.path.basename(f))
+    # for f in train_files:
+    #     print("  -", os.path.basename(f))
     print("Val sequences:", len(val_files))
-    for f in val_files:
-        print("  -", os.path.basename(f))
+    # for f in val_files:
+    #     print("  -", os.path.basename(f))
     if augmented_train_npz_files:
         print("Augmented train sequences:", len(augmented_train_npz_files))
-        for f in augmented_train_npz_files:
-            print("  -", os.path.basename(f))
+        # for f in augmented_train_npz_files:
+        #     print("  -", os.path.basename(f))
     if augmented_val_npz_files:
         print("Augmented val sequences:", len(augmented_val_npz_files))
-        for f in augmented_val_npz_files:
-            print("  -", os.path.basename(f))
+        # for f in augmented_val_npz_files:
+        #     print("  -", os.path.basename(f))
 
     train_data: List[Data] = []
     val_data: List[Data] = []
@@ -351,24 +393,32 @@ def main():
     train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True)
     val_loader = DataLoader(val_data, batch_size=args.batch_size, shuffle=False)
 
-    model = SocialForceGNN(
+    model = build_model(
+        args.model,
         node_dim=5,
         edge_dim=7,
         hidden_dim=args.hidden_dim,
         num_layers=args.num_layers,
+        dropout_p=args.dropout_p,
     ).to(device)
 
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay) # 1e-4
+    
+    # Use ReduceLROnPlateau scheduler to reduce learning rate when validation loss plateaus
+    scheduler = ReduceLROnPlateau(optimizer=opt, mode='min', factor=0.5, patience=4)
 
-    best_val = float("inf")
+    best_val_loss = float("inf")
     train_losses = []
     val_losses = []
+    train_objective_losses = []
     for epoch in range(1, args.epochs + 1):
-        tr_loss = train_one_epoch(
+        tr_loss, tr_objective_loss = train_one_epoch(
             model,
             train_loader,
             opt,
             device,
+            loss_name=args.loss,
+            huber_delta=args.huber_delta,
             use_consistency_loss=args.consistency_loss,
             use_symmetry_loss=args.symmetry_loss,
             lambda_cons=args.lambda_cons,
@@ -377,27 +427,41 @@ def main():
             sigma_vel=args.sigma_vel,
             supervise_noisy=args.supervise_noisy,
         )
-        val_mse, val_mae = evaluate(model, val_loader, device)
+        val_loss = evaluate(
+            model,
+            val_loader,
+            device,
+            loss_name=args.loss,
+            huber_delta=args.huber_delta,
+        )
+
+        # Step the scheduler on the same validation loss used for checkpointing.
+        scheduler.step(val_loss)
         
         train_losses.append(tr_loss)
-        val_losses.append(val_mse)
+        train_objective_losses.append(tr_objective_loss)
+        val_losses.append(val_loss)
 
         print(
             f"Epoch {epoch:03d} | "
-            f"train_mse={tr_loss:.6f} | val_mse={val_mse:.6f} | val_mae={val_mae:.6f}"
+            f"train_loss={tr_loss:.6f} | "
+            f"train_objective={tr_objective_loss:.6f} | "
+            f"val_loss={val_loss:.6f}"
         )
 
-        if val_mse < best_val:
-            best_val = val_mse
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
             torch.save(
                 {
                     "model_state": model.state_dict(),
                     "args": vars(args),
-                    "val_mse": best_val,
+                    "model_name": args.model,
+                    "val_loss": best_val_loss,
+                    "loss_name": args.loss,
                 },
                 args.save_path,
             )
-            print(f"  ✓ saved best model to {args.save_path} (val_mse={best_val:.6f})")
+            print(f"  ✓ saved best model to {args.save_path} (val_loss={best_val_loss:.6f})")
 
     
     # ---- Plot losses vs epochs ----
@@ -405,7 +469,7 @@ def main():
         f"loss_lr{format_float_for_filename(args.lr)}_"
         f"hd{args.hidden_dim}_nl{args.num_layers}_bs{args.batch_size}.png"
     )
-    plot_loss_history(train_losses, val_losses, loss_plot_name)
+    plot_loss_history(train_losses, train_objective_losses, val_losses, loss_plot_name)
     print(f"Saved loss curve to {loss_plot_name}")
 
     print("Done.")
