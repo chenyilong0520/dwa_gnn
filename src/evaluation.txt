@@ -1,22 +1,22 @@
-record_path: record.json
-frame_count: 518
+record_path: result/filter_angle_45/hg_2.json
+frame_count: 516
 collision_radius: 1.200000
 max_sensor_distance: 50.000000
 
 [original_path]
-path_length: 34.613945
-path_irregularity: 0.479067
-closest_pedestrian_distance: 2.047886, ± 0.383506
-minimum_time_to_collision: 5.880019, ± 10.175842, (19)
+path_length: 34.613213
+path_irregularity: 0.470236
+closest_pedestrian_distance: 2.062155, ± 0.382998
+minimum_time_to_collision: 3.830690, ± 4.171971, (13)
 
 [offset_path]
-path_length: 35.821776
-path_irregularity: 1.333571
-closest_pedestrian_distance: 2.061626, ± 0.347411
-minimum_time_to_collision: 5.922314, ± 8.538386, (17)
+path_length: 35.641725
+path_irregularity: 1.230715
+closest_pedestrian_distance: 2.075354, ± 0.347884
+minimum_time_to_collision: 4.825362, ± 3.924625, (10)
 
 [social_force_offset_path]
-path_length: 36.842335
-path_irregularity: 1.432993
-closest_pedestrian_distance: 2.075971, ± 0.375339
-minimum_time_to_collision: 7.531310, ± 11.597711, (16)
+path_length: 36.614514
+path_irregularity: 1.316096
+closest_pedestrian_distance: 2.086505, ± 0.373897
+minimum_time_to_collision: 4.454696, ± 4.433152, (12)

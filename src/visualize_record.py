@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import matplotlib.pyplot as plt
@@ -71,6 +72,42 @@ def build_offset_positions(frames: Sequence[Dict[str, Any]]) -> List[Tuple[float
         (float(frame["offset_position"][0]), float(frame["offset_position"][1]))
         for frame in frames
     ]
+
+
+def compute_social_force_offset(
+    position: Tuple[float, float],
+    pedestrians: Sequence[Dict[str, Any]],
+) -> Tuple[float, float]:
+    total_fx = 0.0
+    total_fy = 0.0
+    robot_x, robot_y = position
+
+    for ped in pedestrians:
+        px, py, vx, vy = ped["filtered_state"]
+        diff_x = robot_x - (float(px) + float(vx))
+        diff_y = robot_y - (float(py) + float(vy))
+        dist = math.hypot(diff_x, diff_y)
+        if dist < 1e-3:
+            continue
+
+        direction_x = diff_x / dist
+        direction_y = diff_y / dist
+        force_mag = math.exp(-dist / 0.5) * 1
+        total_fx += force_mag * direction_x
+        total_fy += force_mag * direction_y
+
+    return (total_fx, total_fy)
+
+
+def build_social_force_positions(frames: Sequence[Dict[str, Any]]) -> List[Tuple[float, float]]:
+    social_force_positions: List[Tuple[float, float]] = []
+    for frame in frames:
+        sensor_state = frame["sensor_filtered_state"]
+        sensor_pos = (float(sensor_state[0]), float(sensor_state[1]))
+        pedestrians = frame.get("pedestrian_tracks", [])
+        offset = compute_social_force_offset(sensor_pos, pedestrians)
+        social_force_positions.append((sensor_pos[0] + offset[0], sensor_pos[1] + offset[1]))
+    return social_force_positions
 
 
 def filter_offset_positions(
@@ -144,6 +181,7 @@ def draw_on_axis(
     ax,
     sensor_positions: Sequence[Point3],
     offset_positions: Sequence[Tuple[float, float]],
+    social_force_positions: Sequence[Tuple[float, float]],
     pedestrian_tracks: Dict[str, Dict[str, Any]],
     title: str,
 ) -> None:
@@ -158,6 +196,18 @@ def draw_on_axis(
         offset_array = np.array(offset_positions, dtype=np.float32)
         ax.plot(offset_array[:, 0], offset_array[:, 1], color="tab:red", linewidth=2.0, linestyle="--", label="predicted offset trajectory")
         ax.scatter(offset_array[-1, 0], offset_array[-1, 1], c="tab:red", s=100, marker="x")
+
+    if social_force_positions:
+        social_force_array = np.array(social_force_positions, dtype=np.float32)
+        ax.plot(
+            social_force_array[:, 0],
+            social_force_array[:, 1],
+            color="tab:blue",
+            linewidth=2.0,
+            linestyle=":",
+            label="social force offset trajectory",
+        )
+        ax.scatter(social_force_array[-1, 0], social_force_array[-1, 1], c="tab:blue", s=100, marker="+")
 
     for track_id, track in pedestrian_tracks.items():
         color = track["color"]
@@ -190,6 +240,7 @@ def draw_on_axis(
     all_points: List[Tuple[float, float]] = []
     all_points.extend([(x, y) for x, y, _ in sensor_positions])
     all_points.extend(offset_positions)
+    all_points.extend(social_force_positions)
     for track in pedestrian_tracks.values():
         all_points.extend([(x, y) for x, y, _, _, _ in track["filtered_states"]])
 
@@ -219,6 +270,8 @@ def main() -> None:
     ap.add_argument("--save-path", type=str, default="visualize_record.png")
     ap.add_argument("--ekf", type=parse_bool_arg, nargs="?", const=True, default=True)
     ap.add_argument("--no-ekf", dest="ekf", action="store_false")
+    ap.add_argument("--show-social-force-offset", type=parse_bool_arg, nargs="?", const=True, default=False)
+    ap.add_argument("--no-show-social-force-offset", dest="show_social_force_offset", action="store_false")
     args = ap.parse_args()
 
     frames = load_frames(args.record_path)
@@ -230,10 +283,18 @@ def main() -> None:
     offset_positions = build_offset_positions(selected_frames)
     if args.ekf:
         offset_positions = filter_offset_positions(selected_frames, offset_positions)
+    social_force_positions = build_social_force_positions(selected_frames) if args.show_social_force_offset else []
     pedestrian_tracks = build_pedestrian_tracks(selected_frames)
 
     fig, ax = plt.subplots(figsize=(10, 10))
-    draw_on_axis(ax, sensor_positions, offset_positions, pedestrian_tracks, args.title)
+    draw_on_axis(
+        ax,
+        sensor_positions,
+        offset_positions,
+        social_force_positions,
+        pedestrian_tracks,
+        args.title,
+    )
     fig.tight_layout()
 
     if args.save_path:

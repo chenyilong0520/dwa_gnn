@@ -110,7 +110,7 @@ def compute_social_force_offset(position: Vec2, pedestrians: Sequence[Dict[str, 
 
         direction_x = diff_x / dist
         direction_y = diff_y / dist
-        force_mag = math.exp(-dist / 0.5) * 1
+        force_mag = math.exp(-dist / 0.5) * 1.0
         total_fx += force_mag * direction_x
         total_fy += force_mag * direction_y
 
